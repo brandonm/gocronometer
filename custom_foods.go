@@ -25,12 +25,82 @@ type RecipeIngredient struct {
 	Name      string // populated after resolving via GetFood or ExportFood
 }
 
+// FoodDetail is the full result from GetFood, including the food's own info,
+// its ingredients (if a recipe), and per-100g nutrient data from the GWT response.
+type FoodDetail struct {
+	FoodID      int64
+	Name        string
+	Source      string // e.g. "NCCDB", "CRDB", "custom"
+	Ingredients []RecipeIngredient
+	// NutrientsPer100g contains nutrient data keyed by USDA nutrient code.
+	// Values are per 100g. Scale by (amount/100) for actual serving.
+	NutrientsPer100g map[int]float64
+}
+
 // FoodExport represents the nutrient data from a food CSV export.
 type FoodExport struct {
 	FoodID   int64
 	FoodName string
 	Amount   string
 	Nutrients map[string]float64 // nutrient name -> value (raw from CSV)
+}
+
+// USDANutrientNames maps USDA nutrient codes to human-readable names and units.
+var USDANutrientNames = map[int]struct{ Name, Unit string }{
+	208:  {"calories", "kcal"},
+	203:  {"protein", "g"},
+	205:  {"carbs", "g"},
+	204:  {"fat", "g"},
+	291:  {"fiber", "g"},
+	269:  {"sugar", "g"},
+	10009: {"added_sugars", "g"},
+	10005: {"sugar_alcohol", "g"},
+	// -1205 is net carbs in Cronometer's system
+	606:  {"saturated_fat", "g"},
+	645:  {"monounsaturated_fat", "g"},
+	646:  {"polyunsaturated_fat", "g"},
+	605:  {"trans_fat", "g"},
+	601:  {"cholesterol", "mg"},
+	307:  {"sodium", "mg"},
+	306:  {"potassium", "mg"},
+	301:  {"calcium", "mg"},
+	303:  {"iron", "mg"},
+	304:  {"magnesium", "mg"},
+	305:  {"phosphorus", "mg"},
+	309:  {"zinc", "mg"},
+	312:  {"copper", "mg"},
+	315:  {"manganese", "mg"},
+	317:  {"selenium", "mcg"},
+	// 324: vitamin_a (IU)
+	320:  {"vitamin_a", "mcg"},
+	401:  {"vitamin_c", "mg"},
+	324:  {"vitamin_d", "IU"},
+	323:  {"vitamin_e", "mg"},
+	430:  {"vitamin_k", "mcg"},
+	404:  {"b1_thiamine", "mg"},
+	405:  {"b2_riboflavin", "mg"},
+	406:  {"b3_niacin", "mg"},
+	410:  {"b5_pantothenic", "mg"},
+	415:  {"b6", "mg"},
+	418:  {"b12", "mcg"},
+	417:  {"folate", "mcg"},
+	421:  {"choline", "mg"},
+	// 435: biotin
+	502:  {"cystine", "g"},
+	512:  {"histidine", "g"},
+	503:  {"isoleucine", "g"},
+	504:  {"leucine", "g"},
+	505:  {"lysine", "g"},
+	506:  {"methionine", "g"},
+	508:  {"phenylalanine", "g"},
+	507:  {"threonine", "g"},
+	501:  {"tryptophan", "g"},
+	509:  {"tyrosine", "g"},
+	510:  {"valine", "g"},
+	262:  {"caffeine", "mg"},
+	255:  {"water", "g"},
+	518:  {"omega_3", "g"},
+	// omega_6 varies
 }
 
 // FindMyFoods returns all custom foods for the logged-in user.
@@ -350,8 +420,8 @@ func ParseFoodExport(csvData string) (*FoodExport, error) {
 	return export, nil
 }
 
-// GetFood retrieves a single food's details including ingredients.
-func (c *Client) GetFood(ctx context.Context, foodID int64) ([]RecipeIngredient, error) {
+// GetFood retrieves a single food's details including ingredients and per-100g nutrients.
+func (c *Client) GetFood(ctx context.Context, foodID int64) (*FoodDetail, error) {
 	reqBody := fmt.Sprintf(GWTGetFood, c.Nonce, foodID)
 
 	req, err := c.NewGWTRequestWithContext(ctx, "POST", GWTBaseURL, strings.NewReader(reqBody))
@@ -374,17 +444,22 @@ func (c *Client) GetFood(ctx context.Context, foodID int64) ([]RecipeIngredient,
 		return nil, fmt.Errorf("failed to read getFood response: %w", err)
 	}
 
-	return parseGetFoodIngredients(string(bodyBytes))
+	return parseGetFoodResponse(string(bodyBytes), foodID)
 }
 
-// parseGetFoodIngredients extracts ingredient food IDs and measure IDs from a getFood response.
-// The GWT response contains Ingredient objects with food IDs, measure IDs, and amounts.
-//
-// In the GWT data, ingredients appear in a pattern near the parent food ID:
-//   measureID, "hash", ingredientFoodID, amount, measureType
-// followed by: numberOfIngredients, 1, parentFoodID
-func parseGetFoodIngredients(body string) ([]RecipeIngredient, error) {
-	strings, err := extractGWTStringTable(body)
+// GetFoodIngredients is a convenience method that returns just the ingredients.
+func (c *Client) GetFoodIngredients(ctx context.Context, foodID int64) ([]RecipeIngredient, error) {
+	detail, err := c.GetFood(ctx, foodID)
+	if err != nil {
+		return nil, err
+	}
+	return detail.Ingredients, nil
+}
+
+// parseGetFoodResponse extracts food details from a getFood GWT response including
+// name, source, ingredients, and per-100g nutrient data.
+func parseGetFoodResponse(body string, requestedFoodID int64) (*FoodDetail, error) {
+	strs, err := extractGWTStringTable(body)
 	if err != nil {
 		return nil, fmt.Errorf("parsing string table: %w", err)
 	}
@@ -394,77 +469,168 @@ func parseGetFoodIngredients(body string) ([]RecipeIngredient, error) {
 		return nil, fmt.Errorf("parsing numeric data: %w", err)
 	}
 
-	// Look for the Ingredient type in the string table
+	detail := &FoodDetail{
+		FoodID:           requestedFoodID,
+		NutrientsPer100g: make(map[int]float64),
+	}
+
+	// Extract food name from string table — it's a non-type-descriptor, non-URL,
+	// non-measure string that looks like a food name
+	for _, s := range strs {
+		if isGWTTypeDescriptor(s) || s == "" {
+			continue
+		}
+		// Skip common non-name strings
+		if s == "g" || s == "oz" || s == "cup" || s == "tbsp" || s == "tsp" || s == "ml" ||
+			s == "true" || s == "false" || s == "en" || s == "fr" || s == "de" || s == "es" ||
+			s == "English" || s == "French" || s == "German" || s == "Spanish" ||
+			s == "full recipe" || s == "Serving" || s == "advancedServingSize" ||
+			s == "Custom" || s == "custom" {
+			continue
+		}
+		// Skip URLs
+		if stringContains(s, "http") {
+			continue
+		}
+		// Skip language names (Français, Deutsch, Español)
+		if stringContains(s, "ç") || stringContains(s, "ü") || stringContains(s, "ñ") {
+			continue
+		}
+		// Food source identifiers
+		if s == "NCCDB" || s == "CRDB" {
+			continue
+		}
+		// Source tags like "NCCDB:13930"
+		if stringContains(s, "NCCDB:") || stringContains(s, "CRDB:") {
+			detail.Source = s
+			continue
+		}
+		// UPC/barcode-like strings (all digits)
+		allDigits := true
+		for _, ch := range s {
+			if ch < '0' || ch > '9' {
+				allDigits = false
+				break
+			}
+		}
+		if allDigits && len(s) > 3 {
+			continue
+		}
+		// Measure descriptions (contain common measure words)
+		if stringContains(s, "leaf") || stringContains(s, "chopped") ||
+			stringContains(s, "mashed") || stringContains(s, "sliced") ||
+			stringContains(s, "each") || stringContains(s, "doppio") ||
+			stringContains(s, "solo") || stringContains(s, "head") ||
+			stringContains(s, "Gallon") || stringContains(s, "Quart") ||
+			stringContains(s, "Pint") || stringContains(s, "Cup") ||
+			stringContains(s, "bottle") || stringContains(s, "fl oz") ||
+			stringContains(s, "Tbsp") || stringContains(s, "Cups") ||
+			stringContains(s, "slices") || stringContains(s, "kg") ||
+			stringContains(s, "lb") {
+			continue
+		}
+		// If we get here and it's a reasonable length, it's likely the food name
+		// The primary food name appears as a translation — look for patterns like
+		// "Lettuce, Green Leaf" or "Bananas, Raw"
+		if len(s) > 3 && detail.Name == "" {
+			detail.Name = s
+		}
+	}
+
+	// Extract per-100g nutrients from the numeric data.
+	// Pattern: nutrientCode, value, ... repeated throughout.
+	// In the GWT data, nutrients appear as: -20, code, value, 16, code, 15
+	// or: -21, code, value, 22, code, 21
+	// The prefix (-20 or -21) and suffix (16,code,15 or 22,code,21) vary but
+	// the pattern is: [prefix], nutrientCode, value, [suffix], nutrientCode, [suffix2]
+	for i := 0; i < len(numericData)-2; i++ {
+		// Look for the pattern: integer_code, float_value where code is a known USDA code
+		code, cerr := strconv.Atoi(numericData[i])
+		if cerr != nil {
+			// Try negative codes (Cronometer uses negative for some custom codes like -1205 = net carbs)
+			if numericData[i][0] == '-' {
+				code, cerr = strconv.Atoi(numericData[i])
+			}
+			if cerr != nil {
+				continue
+			}
+		}
+
+		// Check if this is a known nutrient code
+		if _, known := USDANutrientNames[code]; !known {
+			// Also accept the raw code for non-mapped nutrients
+			if code < 100 || code > 100000 {
+				continue
+			}
+		}
+
+		value, verr := strconv.ParseFloat(numericData[i+1], 64)
+		if verr != nil {
+			continue
+		}
+
+		// Verify by checking if the code appears again 2 positions later (GWT confirmation pattern)
+		if i+3 < len(numericData) {
+			confirmCode, _ := strconv.Atoi(numericData[i+3])
+			if confirmCode == code {
+				detail.NutrientsPer100g[code] = value
+			}
+		}
+	}
+
+	// Extract ingredients (same logic as before)
 	hasIngredientType := false
-	for _, s := range strings {
+	for _, s := range strs {
 		if stringContains(s, "Ingredient") {
 			hasIngredientType = true
 			break
 		}
 	}
-	if !hasIngredientType {
-		// No ingredients — this is a simple food, not a recipe
-		return nil, nil
-	}
 
-	// Parse ingredients by finding the pattern:
-	// N, 1, parentFoodID — where N is the ingredient count
-	// The N ingredients appear before this marker, each with:
-	// [optional numbers], measureID, "hash", foodID, amount, measureType
-	//
-	// Strategy: find all "hash" strings (5-8 char alphanumeric in quotes),
-	// and extract the foodID and measureID around them.
-	type ingredientCandidate struct {
-		measureID int64
-		foodID    int64
-		amount    float64
-	}
-
-	var ingredients []RecipeIngredient
-
-	// Scan for quoted hash strings in numeric data — they appear between measureID and foodID.
-	// Ingredient hashes are 7-8 character alphanumeric strings like "WVC3i", "Z0rzYsA".
-	// Pattern in the data: ..., measureID, "hash", foodID, amount, ...
-	for i := 0; i < len(numericData); i++ {
-		val := numericData[i]
-		// Hash strings are quoted in the numeric stream and are 5-10 chars
-		if len(val) > 2 && val[0] == '"' && val[len(val)-1] == '"' {
-			hash := val[1 : len(val)-1]
-			// Ingredient hashes are short alphanumeric strings (5-10 chars)
-			if len(hash) < 4 || len(hash) > 12 {
-				continue
-			}
-			// Must look like an ingredient hash (alphanumeric + $ allowed)
-			isHash := true
-			for _, ch := range hash {
-				if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '$' || ch == '_') {
-					isHash = false
-					break
+	if hasIngredientType {
+		for i := 0; i < len(numericData); i++ {
+			val := numericData[i]
+			if len(val) > 2 && val[0] == '"' && val[len(val)-1] == '"' {
+				hash := val[1 : len(val)-1]
+				if len(hash) < 4 || len(hash) > 12 {
+					continue
 				}
-			}
-			if !isHash {
-				continue
-			}
-
-			// Look backwards for measureID and forwards for foodID + amount
-			if i >= 1 && i+2 < len(numericData) {
-				measureID, merr := strconv.ParseInt(numericData[i-1], 10, 64)
-				foodID, ferr := strconv.ParseInt(numericData[i+1], 10, 64)
-				amount, aerr := strconv.ParseFloat(numericData[i+2], 64)
-
-				// measureID should be large (>100000) for real ingredient measures
-				if merr == nil && ferr == nil && aerr == nil && foodID > 0 && measureID > 100000 {
-					ingredients = append(ingredients, RecipeIngredient{
-						FoodID:    foodID,
-						MeasureID: measureID,
-						Amount:    amount,
-					})
+				isHash := true
+				for _, ch := range hash {
+					if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '$' || ch == '_') {
+						isHash = false
+						break
+					}
+				}
+				if !isHash {
+					continue
+				}
+				if i >= 1 && i+2 < len(numericData) {
+					measureID, merr := strconv.ParseInt(numericData[i-1], 10, 64)
+					foodID, ferr := strconv.ParseInt(numericData[i+1], 10, 64)
+					amount, aerr := strconv.ParseFloat(numericData[i+2], 64)
+					if merr == nil && ferr == nil && aerr == nil && foodID > 0 && measureID > 100000 {
+						detail.Ingredients = append(detail.Ingredients, RecipeIngredient{
+							FoodID:    foodID,
+							MeasureID: measureID,
+							Amount:    amount,
+						})
+					}
 				}
 			}
 		}
 	}
 
-	return ingredients, nil
+	return detail, nil
+}
+
+// parseGetFoodIngredients is kept for backward compatibility with tests.
+func parseGetFoodIngredients(body string) ([]RecipeIngredient, error) {
+	detail, err := parseGetFoodResponse(body, 0)
+	if err != nil {
+		return nil, err
+	}
+	return detail.Ingredients, nil
 }
 
 // Helper functions to avoid import conflicts with the strings package

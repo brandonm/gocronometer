@@ -49,7 +49,8 @@ func main() {
 	// 3. GetFood (get ingredients for first custom food)
 	testFood := foods[0]
 	fmt.Printf("=== GetFood(%d) [%s]...\n", testFood.ID, testFood.Name)
-	ingredients, err := client.GetFood(ctx, testFood.ID)
+	detail, err := client.GetFood(ctx, testFood.ID)
+	ingredients := detail.Ingredients
 	if err != nil {
 		log.Fatalf("GetFood failed: %v", err)
 	}
