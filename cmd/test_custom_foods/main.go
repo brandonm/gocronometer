@@ -7,7 +7,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/brandonm/gocronometer"
+	"github.com/jrmycanady/gocronometer"
 )
 
 func main() {
