@@ -1,4 +1,4 @@
-module github.com/jrmycanady/gocronometer
+module github.com/brandonm/gocronometer
 
 go 1.24.0
 

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jrmycanady/gocronometer"
+	"github.com/brandonm/gocronometer"
 )
 
 // setup perform some basic actions to setup testing.

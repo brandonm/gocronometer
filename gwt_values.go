@@ -6,12 +6,11 @@ package gocronometer
 const (
 	GWTContentType = "text/x-gwt-rpc; charset=UTF-8"
 	GWTModuleBase  = "https://cronometer.com/cronometer/"
-	GWTPermutation = "7B121DC5483BF272B1BC1916DA9FA963"
+	GWTPermutation = "2E2ADC7983FC786FB6AFF6B9B2FEA5AF"
 
 	// GWTHeader is what appears to be a hash value that is provided at the beginning of every GWT request. As it
 	// changes with app updates it appears to be related to validating the version the requester is expecting.
-	//GWTHeader = "3B6C5196158464C5643BA376AF05E7F1"
-	GWTHeader = "2D6A926E3729946302DC68073CB0D550"
+	GWTHeader = "DA19253CB693C806016C64754CF28FFF"
 )
 
 // The following are the GWT procedure calls as found from inspection of the app.
@@ -29,4 +28,12 @@ const (
 	// GWTLogout will log the session out.
 	// The only parameter should be the sesnonce.
 	GWTLogout = "7|0|6|https://cronometer.com/cronometer/|" + GWTHeader + "|com.cronometer.shared.rpc.CronometerService|logout|java.lang.String/2004016611|%s|1|2|3|4|1|5|6|"
+
+	// GWTFindMyFoods lists all custom foods for the logged-in user.
+	// Parameter: sesnonce, userID
+	GWTFindMyFoods = "7|0|7|https://cronometer.com/cronometer/|" + GWTHeader + "|com.cronometer.shared.rpc.CronometerService|findMyFoods|java.lang.String/2004016611|I|%s|1|2|3|4|2|5|6|7|%s|"
+
+	// GWTGetFood retrieves a single food's details including ingredients.
+	// Parameter: sesnonce, foodID
+	GWTGetFood = "7|0|7|https://cronometer.com/cronometer/|" + GWTHeader + "|com.cronometer.shared.rpc.CronometerService|getFood|java.lang.String/2004016611|I|%s|1|2|3|4|2|5|6|7|%d|"
 )
