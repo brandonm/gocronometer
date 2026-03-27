@@ -144,15 +144,9 @@ func TestExtractGWTNumericData(t *testing.T) {
 	}
 }
 
-// Test with actual getFood response data (Basic Sandwich from second getAllFood call)
+// TestParseGetFoodIngredients tests ingredient extraction using the real Basic Sandwich response.
 func TestParseGetFoodIngredients(t *testing.T) {
-	// Simplified response based on the Basic Sandwich getFood pattern.
-	// Ingredients: 5 items with food IDs and measure IDs.
-	// The real response is very large, so we use a trimmed version that
-	// contains the ingredient block pattern.
-	body := `//OK[91,13,-11,11,1.0,-581,81,0,237264512,67861120,0,1.0,8,1.0,-581,80,0,237264510,67861120,0,1.0,8,151.0,3,10,32,0,237264511,67861120,0,1.0,8,3,1,237264510,7,"Z0tJTOQ",-5,413734,0,1079813,"WVC3i",466098,48.0,79,0,0,21799474,"WVC3h",7643764,10.0,79,0,0,52080155,"WVC3g",18812812,13.0,79,3878862,0,9648045,"WVC3f",3739632,28.0,79,0,0,59630308,"WVC3e",21649514,52.0,79,5,1,67861120,0,0,5,15,0,1,0,0,2,["com.cronometer.shared.foods.models.Ingredient/1280520736","other"],0,7]`
-
-	ingredients, err := parseGetFoodIngredients(body)
+	ingredients, err := parseGetFoodIngredients(basicSandwichResponse)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -161,32 +155,23 @@ func TestParseGetFoodIngredients(t *testing.T) {
 		t.Fatalf("expected 5 ingredients, got %d", len(ingredients))
 	}
 
-	// Verify food IDs were extracted
 	expectedFoodIDs := map[int64]bool{
-		466098:   true,
-		7643764:  true,
-		18812812: true,
-		3739632:  true,
-		21649514: true,
+		466098: true, 7643764: true, 18812812: true, 3739632: true, 21649514: true,
 	}
-
 	for _, ing := range ingredients {
 		if !expectedFoodIDs[ing.FoodID] {
 			t.Errorf("unexpected food ID: %d", ing.FoodID)
 		}
 		delete(expectedFoodIDs, ing.FoodID)
 	}
-
 	for id := range expectedFoodIDs {
 		t.Errorf("missing food ID: %d", id)
 	}
 
-	// Verify amounts
 	amountByFood := make(map[int64]float64)
 	for _, ing := range ingredients {
 		amountByFood[ing.FoodID] = ing.Amount
 	}
-
 	if amountByFood[466098] != 48.0 {
 		t.Errorf("food 466098: expected amount 48.0, got %f", amountByFood[466098])
 	}
@@ -195,16 +180,89 @@ func TestParseGetFoodIngredients(t *testing.T) {
 	}
 }
 
+// TestParseGetFoodNoIngredients tests that a simple food (Lettuce) has no ingredients.
 func TestParseGetFoodNoIngredients(t *testing.T) {
-	// A simple food (not a recipe) has no Ingredient type in the string table
-	body := `//OK[1,2,3,["com.cronometer.shared.foods.models.Food/2097636843","other"],0,7]`
-
-	ingredients, err := parseGetFoodIngredients(body)
+	ingredients, err := parseGetFoodIngredients(lettuceResponse)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	if len(ingredients) != 0 {
 		t.Errorf("expected 0 ingredients for simple food, got %d", len(ingredients))
+	}
+}
+
+// TestParseGetAllFoodsResponse tests the batch parsing wrapper that the collector calls.
+func TestParseGetAllFoodsResponse(t *testing.T) {
+	requestedIDs := []int64{21649514, 3739632, 18812812, 7643764, 466098}
+
+	results, err := parseGetAllFoodsResponse(getAllFoodResponse, requestedIDs)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(results) != 5 {
+		t.Fatalf("expected 5 foods, got %d", len(results))
+	}
+
+	// Verify Nature's Harvest Bread (CRDB)
+	bread := results[21649514]
+	if bread == nil {
+		t.Fatal("missing food 21649514 (Bread)")
+	}
+	if bread.Name != "Nature's Harvest, Bread, 100% Whole Wheat Bread" {
+		t.Errorf("Bread name: got %q", bread.Name)
+	}
+	if bread.Source != "CRDB" {
+		t.Errorf("Bread source: got %q, want CRDB", bread.Source)
+	}
+	if len(bread.NutrientsPer100g) == 0 {
+		t.Error("Bread: expected nutrients")
+	}
+
+	// Verify Lettuce (NCCDB)
+	lettuce := results[466098]
+	if lettuce == nil {
+		t.Fatal("missing food 466098 (Lettuce)")
+	}
+	if lettuce.Source != "NCCDB:13930" {
+		t.Errorf("Lettuce source: got %q, want NCCDB:13930", lettuce.Source)
+	}
+	if lettuce.Name != "Lettuce, Green Leaf" {
+		t.Errorf("Lettuce name: got %q", lettuce.Name)
+	}
+
+	// Verify all foods have nutrients
+	for id, food := range results {
+		if len(food.NutrientsPer100g) == 0 {
+			t.Errorf("food %d (%s): no nutrients", id, food.Name)
+		}
+	}
+}
+
+// TestParseGetFoodResponse tests the single-food parsing wrapper.
+func TestParseGetFoodResponse(t *testing.T) {
+	detail, err := parseGetFoodResponse(basicSandwichResponse, 67861120)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if detail.FoodID != 67861120 {
+		t.Errorf("FoodID: got %d, want 67861120", detail.FoodID)
+	}
+	if detail.Name != "Basic Sandwich" {
+		t.Errorf("Name: got %q, want Basic Sandwich", detail.Name)
+	}
+	if detail.Source != "Custom" {
+		t.Errorf("Source: got %q, want Custom", detail.Source)
+	}
+	if len(detail.Ingredients) != 5 {
+		t.Errorf("Ingredients: got %d, want 5", len(detail.Ingredients))
+	}
+	if len(detail.NutrientsPer100g) == 0 {
+		t.Error("expected nutrients")
+	}
+	if detail.NutrientsPer100g[208] != 328.64 {
+		t.Errorf("Energy: got %f, want 328.64", detail.NutrientsPer100g[208])
 	}
 }

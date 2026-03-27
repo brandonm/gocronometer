@@ -7,393 +7,411 @@ import (
 
 // GWTFood represents a deserialized Food object from the GWT response.
 type GWTFood struct {
-	ID           int64
-	ID2          int64
-	TypeEnum     int // FoodType enum ordinal
+	ID           int
+	FoodType     int // FoodType enum ordinal
 	Ingredients  []GWTIngredient
 	Nutrients    map[int]float64 // USDA nutrient code → value per 100g
-	Weight       float64
 	Name         string
 	Description  string
 	Measures     []GWTMeasure
-	TagName      string
-	Source       string // e.g. "NCCDB:13930", "CRDB"
+	Source       string // e.g. "NCCDB:13930", "CRDB", "Custom"
 	Translations map[string]string // language code → translated name
+	UserID       int
 }
 
-// GWTIngredient represents a deserialized Ingredient from the GWT response.
+// GWTIngredient represents a recipe ingredient.
 type GWTIngredient struct {
-	FoodID    int64
-	MeasureID int64
-	Amount    float64
-	Hash      string
+	FoodID    int
+	MeasureID int
+	Amount    float64 // weight in grams
 }
 
 // GWTMeasure represents a serving size measure.
 type GWTMeasure struct {
-	ID     int64
-	FoodID int64
-	Amount float64
+	ID     int
+	FoodID int
 	Name   string
+	Grams  float64 // grams per unit of this measure
 }
 
 // DeserializeFood reads a Food object from the GWT stream.
 // Must be called after ReadObject() returns the Food type signature.
 //
-// Food fields (16 total, from GWT JS analysis):
-//  1. long   — ID
-//  2. long   — secondary ID
-//  3. int    — FoodType enum ordinal
-//  4. list   — ingredients (ArrayList of Ingredient)
-//  5. object — NutrientMap
-//  6. double — weight
-//  7. string — name
-//  8. string — description
-//  9. list   — measures (ArrayList of Measure)
-// 10. string — tag name
-// 11. object — unknown (type 507 — nutrition label?)
-// 12. long   — unknown
-// 13. string — source tag
-// 14. object — unknown (type 105 — FoodTag set?)
-// 15. long   — unknown
-// 16. list   — translations
+// Food has 20 fields (verified by tracing PKi/RKi in compiled GWT JS):
+//
+//	 1 (b)  int     — unknown (always 0)
+//	 2 (c)  double  — unknown (always 0)
+//	 3 (d)  object  — barcode/UPC ArrayList
+//	 4 (e)  int     — unknown
+//	 5 (f)  string  — description
+//	 6 (g)  int     — unknown
+//	 7 (i)  int     — unknown
+//	 8 (j)  int     — Food ID
+//	 9 (k)  object  — Ingredients (ArrayList of Ingredient)
+//	10 (n)  object  — NutritionLabelType enum
+//	11 (o)  long    — timestamp
+//	12 (p)  object  — FoodMeasures (wraps ArrayList of Measure)
+//	13 (q)  object  — NutrientMap (per 100g)
+//	14 (s)  object  — properties HashMap<String,String>
+//	15 (t)  double  — unknown (always 0)
+//	16 (u)  string  — source/database ("Custom", "CRDB", "NCCDB:...")
+//	17 (v)  object  — tags HashSet
+//	18 (A)  object  — Translations (ArrayList of Translation)
+//	19 (B)  object  — FoodType enum
+//	20 (C)  int     — user ID
 func DeserializeFood(r *GWTReader) (*GWTFood, error) {
 	f := &GWTFood{
 		Nutrients:    make(map[int]float64),
 		Translations: make(map[string]string),
 	}
 
-	// From the raw data trace, reading backwards from the type token:
-	// [0]=0 [1]=0 [2]=2→ArrayList [3]=1→Food [4]=3→String [5]=4→"4076"
-	// [6]=26→FoodTag [7]=5→description [8]=0 [9]=0 [10]=466098(ID)
-	// [11]=0 [12]=6→NutritionLabel [13]=0 [14]="Zjjf7wA" [15]=7→FoodMeasures
-	//
-	// Revised field mapping based on actual data:
-	// The JS has: Mn, Mn, Jn, Ln, Bn, Nn, Pn, Pn, Ln, Pn, Bn, Mn, Pn, Bn, Mn, Ln
-	// Where Mn/Jn might both be readInt, and Ln/Bn are readObject variants
-	//
-	// Actual interpretation from data:
-	// Field 1 (Mn): 0 → null object or zero int
-	// Field 2 (Mn): 0 → null object or zero int
-	// Field 3 (Jn): 2 → BUT 2=ArrayList type sig, so this is NOT readInt!
-	//
-	// Reinterpretation: Mn=readInt, Jn=readInt, but Field 3 value=2 just happens
-	// to equal the ArrayList string index. The NEXT field (Ln=readObject) reads
-	// the REAL ArrayList token.
-	//
-	// Wait — [2]=2 as readInt is just the integer 2 (FoodType ordinal).
-	// [3]=1 as readObject → getString(1) = Food type (back-ref?)
-	//
-	// Let's try: maybe Ln() IS different from Bn(). Let me just read all 16 fields
-	// as raw tokens and match against the known data.
-
-	// Simple approach: dump remaining tokens until we find recognizable landmarks
-	// Field 1-2: Mn = readInt
-	r.ReadInt() // 0
-	r.ReadInt() // 0
-
-	// Field 3: Jn = readInt → 2 (FoodType ordinal)
-	f.TypeEnum = r.ReadInt()
-
-	// Field 4: Ln = readObject → for null list, token=0; for list, token=ArrayList type index
-	ingList := r.ReadObject()
-	if ingList != "" && !strings.HasPrefix(ingList, "__backref") &&
-		strings.Contains(ingList, "ArrayList") {
-		count := r.ReadInt()
-		for i := 0; i < count; i++ {
-			ing, err := deserializeIngredient(r)
-			if err != nil {
-				return f, fmt.Errorf("ingredient %d: %w", i, err)
-			}
-			f.Ingredients = append(f.Ingredients, ing)
-		}
-	}
-
-	// Field 5: Bn = readObject → NutrientMap (or FoodMeasures?)
-	f5type := r.ReadObject()
-	if f5type != "" && !strings.HasPrefix(f5type, "__backref") {
-		if strings.Contains(f5type, "NutrientMap") {
-			deserializeNutrientMap(r, f)
-		} else if strings.Contains(f5type, "String") {
-			// This might be a string field, not an object
-			// Back up and re-read
-		}
-	}
-
-	// Field 6: Nn = readDouble
-	f.Weight = r.ReadDouble()
-
-	// Field 7: Pn = readString → name
-	f.Name = r.ReadString()
-
-	// Field 8: Pn = readString → description
+	// Field 1 (b): int — unknown
+	r.ReadInt()
+	// Field 2 (c): double — unknown
+	r.ReadDouble()
+	// Field 3 (d): object — barcode ArrayList (skip)
+	skipArrayList(r)
+	// Field 4 (e): int — unknown
+	r.ReadInt()
+	// Field 5 (f): string — description
 	f.Description = r.ReadString()
-
-	// Field 9: Ln = readObject → measures list
-	measList := r.ReadObject()
-	if measList != "" && !strings.HasPrefix(measList, "__backref") &&
-		strings.Contains(measList, "ArrayList") {
-		count := r.ReadInt()
-		for i := 0; i < count; i++ {
-			m, err := deserializeMeasure(r)
-			if err != nil {
-				break
-			}
-			f.Measures = append(f.Measures, m)
-		}
-	}
-
-	// Field 10: Pn = readString → tag name
-	f.TagName = r.ReadString()
-
-	// Field 11: Bn = readObject → NutritionLabelType
-	skipObject(r)
-
-	// Field 12: Mn = readInt
+	// Field 6 (g): int — unknown
 	r.ReadInt()
-
-	// Field 13: Pn = readString → source tag
+	// Field 7 (i): int — unknown
+	r.ReadInt()
+	// Field 8 (j): int — Food ID
+	f.ID = r.ReadInt()
+	// Field 9 (k): object — Ingredients ArrayList
+	if err := deserializeIngredientList(r, f); err != nil {
+		return f, fmt.Errorf("ingredients: %w", err)
+	}
+	// Field 10 (n): object — NutritionLabelType enum
+	skipEnum(r)
+	// Field 11 (o): long — timestamp
+	r.ReadLong()
+	// Field 12 (p): object — FoodMeasures
+	deserializeFoodMeasures(r, f)
+	// Field 13 (q): object — NutrientMap
+	deserializeNutrientMap(r, f)
+	// Field 14 (s): object — properties HashMap<String,String> (skip)
+	skipStringHashMap(r)
+	// Field 15 (t): double — unknown
+	r.ReadDouble()
+	// Field 16 (u): string — source
 	f.Source = r.ReadString()
+	// Field 17 (v): object — tags HashSet (skip)
+	skipHashSet(r)
+	// Field 18 (A): object — Translations ArrayList
+	deserializeTranslationList(r, f)
+	// Field 19 (B): object — FoodType enum
+	f.FoodType = readEnumOrdinal(r)
+	// Field 20 (C): int — user ID
+	f.UserID = r.ReadInt()
 
-	// Field 14: Bn = readObject → FoodTag set
-	tagSetType := r.ReadObject()
-	if tagSetType != "" && !strings.HasPrefix(tagSetType, "__backref") {
-		if strings.Contains(tagSetType, "HashSet") {
-			count := r.ReadInt()
-			for i := 0; i < count; i++ {
-				skipObject(r)
-			}
-		}
-	}
-
-	// Field 15: Mn = readInt
-	r.ReadInt()
-
-	// Field 16: Ln = readObject → translations list
-	transList := r.ReadObject()
-	if transList != "" && !strings.HasPrefix(transList, "__backref") &&
-		strings.Contains(transList, "ArrayList") {
-		count := r.ReadInt()
-		for i := 0; i < count; i++ {
-			lang, name := deserializeTranslation(r)
-			if lang != "" {
-				f.Translations[lang] = name
-			}
-		}
-	}
-
-	// Set display name: prefer English translation, fall back to German, then TagName, then Name
+	// Set display name from translations (prefer English)
 	if en, ok := f.Translations["en"]; ok && en != "" {
 		f.Name = en
-	} else if de, ok := f.Translations["de"]; ok && de != "" && f.Name == "" {
+	} else if de, ok := f.Translations["de"]; ok && de != "" {
 		f.Name = de
-	}
-	if f.Name == "" {
-		f.Name = f.TagName
 	}
 
 	return f, nil
 }
 
-// deserializeIngredient reads an Ingredient from the stream.
-//
-// Ingredient fields (14 total, from GWT JS analysis):
-//  1. object (long wrapper)  — unknown
-//  2. object (long wrapper)  — food ID
-//  3. object (long wrapper)  — measure ID
-//  4. object (Map)           — nutrient overrides
-//  5. object (long wrapper)  — unknown
-//  6. object (long wrapper)  — unknown
-//  7. object (long wrapper)  — unknown
-//  8. int                    — unknown
-//  9. object                 — Measure reference
-// 10. string                 — hash
-// 11. long                   — unknown
-// 12. string                 — name/description
-// 13. object (long wrapper)  — unknown
-// 14. object (long wrapper)  — unknown
-func deserializeIngredient(r *GWTReader) (GWTIngredient, error) {
-	ing := GWTIngredient{}
+// deserializeIngredientList reads an ArrayList of Ingredient objects.
+func deserializeIngredientList(r *GWTReader, f *GWTFood) error {
+	typ := r.ReadObject()
+	if typ == "" || isBackRef(typ) {
+		return nil
+	}
+	if !strings.Contains(typ, "ArrayList") {
+		return fmt.Errorf("expected ArrayList, got %q", typ)
+	}
+	count := r.ReadInt()
+	for i := 0; i < count; i++ {
+		ing, err := deserializeIngredient(r)
+		if err != nil {
+			return fmt.Errorf("ingredient %d: %w", i, err)
+		}
+		f.Ingredients = append(f.Ingredients, ing)
+	}
+	return nil
+}
 
-	// Read type signature
+// deserializeIngredient reads a single Ingredient from the stream.
+// Ingredient has 6 fields: double(amount), int(foodID), long(hash), int(measureID), int(?), int(?)
+func deserializeIngredient(r *GWTReader) (GWTIngredient, error) {
 	typeSig := r.ReadObject()
 	if typeSig == "" {
-		return ing, fmt.Errorf("null ingredient")
+		return GWTIngredient{}, fmt.Errorf("null ingredient")
 	}
 
-	// Field 1: object (long wrapper) — unknown
-	readLongWrapper(r)
+	amount := r.ReadDouble() // grams
+	foodID := r.ReadInt()
+	r.ReadLong() // hash (ignored)
+	measureID := r.ReadInt()
+	r.ReadInt() // unknown
+	r.ReadInt() // unknown
 
-	// Field 2: object (long wrapper) — food ID
-	ing.FoodID = readLongWrapper(r)
+	return GWTIngredient{
+		FoodID:    foodID,
+		MeasureID: measureID,
+		Amount:    amount,
+	}, nil
+}
 
-	// Field 3: object (long wrapper) — measure ID
-	ing.MeasureID = readLongWrapper(r)
+// deserializeFoodMeasures reads a FoodMeasures object containing an ArrayList of Measure.
+func deserializeFoodMeasures(r *GWTReader, f *GWTFood) {
+	typ := r.ReadObject()
+	if typ == "" || isBackRef(typ) {
+		return
+	}
+	// FoodMeasures: int(defaultMeasureID) + ReadObject(ArrayList of Measure)
+	r.ReadInt() // default measure ID
 
-	// Field 4: object (Map) — nutrient overrides
-	skipObject(r)
+	measListType := r.ReadObject()
+	if measListType == "" || isBackRef(measListType) {
+		return
+	}
+	count := r.ReadInt()
+	for i := 0; i < count; i++ {
+		m := deserializeMeasure(r)
+		f.Measures = append(f.Measures, m)
+	}
+}
 
-	// Field 5-7: object (long wrappers) — unknown
-	readLongWrapper(r)
-	readLongWrapper(r)
-	readLongWrapper(r)
+// deserializeMeasure reads a single Measure from the stream.
+// Measure has 8 fields: double(?), double(grams), int(foodID), int(measureID),
+// object(Measure$Type enum), string(name), object(Measure$Type), double(weight)
+func deserializeMeasure(r *GWTReader) GWTMeasure {
+	typeSig := r.ReadObject()
+	if typeSig == "" || isBackRef(typeSig) {
+		return GWTMeasure{}
+	}
 
-	// Field 8: int — unknown
-	r.ReadInt()
+	r.ReadDouble()          // field 1: unknown
+	r.ReadDouble()          // field 2: grams per unit (but often 0?)
+	foodID := r.ReadInt()   // field 3: food ID
+	measureID := r.ReadInt() // field 4: measure ID
+	skipEnum(r)             // field 5: Measure$Type enum
+	name := r.ReadString()  // field 6: name ("g", "full recipe", etc.)
+	skipEnumOrBackRef(r)    // field 7: Measure$Type (usually backref)
+	grams := r.ReadDouble() // field 8: weight in grams
 
-	// Field 9: object — Measure reference
-	skipObject(r)
-
-	// Field 10: string — hash
-	ing.Hash = r.ReadString()
-
-	// Field 11: long — amount (as raw long)
-	ing.Amount = r.ReadDouble() // actually stored as a long that represents the amount
-
-	// Field 12: string — name/description
-	// skip
-	r.ReadString()
-
-	// Field 13-14: object (long wrappers) — unknown
-	readLongWrapper(r)
-	readLongWrapper(r)
-
-	return ing, nil
+	return GWTMeasure{
+		ID:     measureID,
+		FoodID: foodID,
+		Name:   name,
+		Grams:  grams,
+	}
 }
 
 // deserializeNutrientMap reads a NutrientMap from the stream.
-// NutrientMap contains a NutrientFilter enum and a HashMap of nutrient code → value.
+// Structure: NutrientFilter enum + HashMap<Integer(code), Nutrient(value, code, Nutrient$Type)>
 func deserializeNutrientMap(r *GWTReader, f *GWTFood) {
-	// NutrientMap has a filter field
-	filterType := r.ReadObject() // NutrientFilter enum
-	if filterType != "" && !strings.HasPrefix(filterType, "__backref") {
-		r.ReadInt() // enum ordinal
+	typ := r.ReadObject()
+	if typ == "" || isBackRef(typ) {
+		return
 	}
 
-	// HashMap of Integer → Nutrient
+	// NutrientFilter enum
+	skipEnum(r)
+
+	// HashMap
 	mapType := r.ReadObject()
-	if mapType == "" || strings.HasPrefix(mapType, "__backref") {
+	if mapType == "" || isBackRef(mapType) {
 		return
 	}
 
 	count := r.ReadInt()
 	for i := 0; i < count; i++ {
-		// Key: Integer (nutrient code)
+		// Save position before reading the key so we can restore if we've
+		// overrun into non-nutrient data (happens when count > actual entries).
+		saved := r.SavePosition()
+
+		// Key: Integer object wrapping the nutrient code
 		keyType := r.ReadObject()
 		if keyType == "" {
 			continue
 		}
-		code := r.ReadInt()
+		// If the key type isn't Integer or a backref to Integer, we've overrun
+		// the nutrient data into subsequent Food fields. Restore position and stop.
+		if !isBackRef(keyType) && !strings.Contains(keyType, "Integer") {
+			r.RestorePosition(saved)
+			break
+		}
+		code := r.ReadInt() // Integer value = nutrient code
 
-		// Value: Nutrient object
-		nutrientType := r.ReadObject()
-		if nutrientType == "" || strings.HasPrefix(nutrientType, "__backref") {
+		// Value: Nutrient object with 3 fields: double(value), int(code), object(Nutrient$Type)
+		valType := r.ReadObject()
+		if valType == "" {
+			// Null nutrient value — no fields to read
 			continue
 		}
-
-		// Nutrient has: type enum ordinal, then double value
-		nutTypeEnum := r.ReadObject() // Nutrient$Type enum
-		if nutTypeEnum != "" && !strings.HasPrefix(nutTypeEnum, "__backref") {
-			r.ReadInt() // enum ordinal
+		if isBackRef(valType) {
+			continue
 		}
 		value := r.ReadDouble()
+		r.ReadInt() // nutrient code (duplicated)
+		// Nutrient$Type enum (first occurrence is new, rest are backrefs)
+		ntType := r.ReadObject()
+		if ntType != "" && !isBackRef(ntType) {
+			r.ReadInt() // enum ordinal (only for first occurrence)
+		}
 
-		if code > 0 {
+		if code != 0 {
 			f.Nutrients[code] = value
 		}
 	}
 }
 
-// deserializeMeasure reads a Measure from the stream.
-func deserializeMeasure(r *GWTReader) (GWTMeasure, error) {
-	m := GWTMeasure{}
-
-	typeSig := r.ReadObject()
-	if typeSig == "" {
-		return m, fmt.Errorf("null measure")
+// deserializeTranslationList reads an ArrayList of Translation objects.
+func deserializeTranslationList(r *GWTReader, f *GWTFood) {
+	typ := r.ReadObject()
+	if typ == "" || isBackRef(typ) {
+		return
 	}
-
-	// Check if it's a DerivedMeasure (has extra fields)
-	isDerived := strings.Contains(typeSig, "DerivedMeasure")
-
-	if isDerived {
-		// DerivedMeasure extends Measure with conversion fields
-		// Read the base double value
-		r.ReadDouble() // conversion factor
-		// Then read as regular measure
+	if !strings.Contains(typ, "ArrayList") {
+		return
 	}
-
-	// Measure fields: type enum, ID, foodID, ?, amount, name?
-	measType := r.ReadObject() // Measure$Type enum
-	if measType != "" && !strings.HasPrefix(measType, "__backref") {
-		r.ReadInt() // enum ordinal
+	count := r.ReadInt()
+	for i := 0; i < count; i++ {
+		lang, name := deserializeTranslation(r)
+		if lang != "" {
+			f.Translations[lang] = name
+		}
 	}
-
-	m.ID = r.ReadLong()
-	m.FoodID = r.ReadLong()
-
-	// Read remaining fields — amount and possibly a flag
-	r.ReadInt() // unknown flag
-
-	m.Amount = r.ReadDouble()
-
-	return m, nil
 }
 
 // deserializeTranslation reads a Translation object.
-// Returns language code and translated name.
-func deserializeTranslation(r *GWTReader) (string, string) {
+// 3 fields: object(Language), string(translatedName), int(?)
+func deserializeTranslation(r *GWTReader) (langCode string, translatedName string) {
 	typeSig := r.ReadObject()
-	if typeSig == "" || strings.HasPrefix(typeSig, "__backref") {
+	if typeSig == "" || isBackRef(typeSig) {
 		return "", ""
 	}
 
-	// Translation fields: Language enum, then strings
-	langType := r.ReadObject() // Language enum
-	if langType == "" {
+	// Language object (NOT an enum): 1 field which is a Locale-like inner object
+	langType := r.ReadObject()
+	if langType == "" || isBackRef(langType) {
 		return "", ""
 	}
-	if !strings.HasPrefix(langType, "__backref") {
-		r.ReadInt() // enum ordinal
+	// Language inner object token resolves to the language code ("en", "fr", "de")
+	// The inner object then has 3 string fields: displayName, flagURL, localizedName
+	code := r.ReadObject() // type token = language code string
+	if code != "" && !isBackRef(code) {
+		r.ReadString() // displayName ("English")
+		r.ReadString() // flagURL
+		r.ReadString() // localizedName ("English")
 	}
 
-	langCode := r.ReadString()     // "en", "de", etc.
-	langDisplay := r.ReadString()  // "English", "German", etc.
-	flagURL := r.ReadString()      // flag image URL
-	translatedName := r.ReadString() // the actual translated food name
+	translatedName = r.ReadString()
+	r.ReadInt() // unknown
 
-	_ = langDisplay
-	_ = flagURL
-
-	return langCode, translatedName
+	return code, translatedName
 }
 
-// readLongWrapper reads a wrapped Long object (java.lang.Long or similar).
-// Returns 0 for null.
-func readLongWrapper(r *GWTReader) int64 {
-	typeSig := r.ReadObject()
-	if typeSig == "" {
-		return 0
-	}
-	if strings.HasPrefix(typeSig, "__backref") {
-		return 0 // back-reference, can't resolve
-	}
-	return r.ReadLong()
-}
-
-// skipObject reads and discards an object token.
-// For null objects (token 0), does nothing extra.
-// For real objects, we can't skip the fields without knowing the type,
-// so this only handles null and back-references.
-func skipObject(r *GWTReader) {
-	typeSig := r.ReadObject()
-	if typeSig == "" || strings.HasPrefix(typeSig, "__backref") {
+// skipArrayList reads and discards an ArrayList and all its elements.
+// Handles String elements (barcode/UPC lists) and FoodTag elements (empty deserializer).
+func skipArrayList(r *GWTReader) {
+	typ := r.ReadObject()
+	if typ == "" || isBackRef(typ) {
 		return
 	}
-
-	// For known simple types, read their value
-	if strings.Contains(typeSig, "NutritionLabelType") {
-		r.ReadInt() // enum ordinal
+	count := r.ReadInt()
+	for i := 0; i < count; i++ {
+		elemType := r.ReadObject()
+		if elemType == "" || isBackRef(elemType) {
+			continue
+		}
+		// String objects have one string field
+		if strings.Contains(elemType, "String") {
+			r.ReadString()
+		}
+		// FoodTag has empty deserializer — nothing extra to read
 	}
-	// Other unknown types — we can't skip without knowing field count
+}
+
+// skipEnum reads an enum object (type token + ordinal).
+func skipEnum(r *GWTReader) {
+	typ := r.ReadObject()
+	if typ == "" || isBackRef(typ) {
+		return
+	}
+	r.ReadInt() // ordinal
+}
+
+// readEnumOrdinal reads an enum and returns its ordinal. Returns -1 for null.
+func readEnumOrdinal(r *GWTReader) int {
+	typ := r.ReadObject()
+	if typ == "" || isBackRef(typ) {
+		return -1
+	}
+	return r.ReadInt()
+}
+
+// skipEnumOrBackRef reads an enum type token. If it's a new enum, reads the ordinal.
+// If it's a back-reference, does nothing extra.
+func skipEnumOrBackRef(r *GWTReader) {
+	typ := r.ReadObject()
+	if typ == "" || isBackRef(typ) {
+		return
+	}
+	r.ReadInt()
+}
+
+// skipHashSet reads and discards a HashSet of FoodTag enums.
+func skipHashSet(r *GWTReader) {
+	typ := r.ReadObject()
+	if typ == "" || isBackRef(typ) {
+		return
+	}
+	count := r.ReadInt()
+	for i := 0; i < count; i++ {
+		// FoodTag is an enum: instantiator reads ordinal, deserializer is empty.
+		// So each element = type token + ordinal.
+		skipEnum(r)
+	}
+}
+
+// skipStringHashMap reads and discards a HashMap<String,String>.
+// If the object is not a HashMap (null or different type), does nothing.
+func skipStringHashMap(r *GWTReader) {
+	typ := r.ReadObject()
+	if typ == "" || isBackRef(typ) {
+		return
+	}
+	if !strings.Contains(typ, "HashMap") {
+		// Not a HashMap — might be null or a different object type.
+		// For non-HashMap objects, we need to handle them properly.
+		// Check if it's a known skippable type, otherwise this is a problem.
+		if strings.Contains(typ, "HashSet") {
+			// Accidentally read into field 17's HashSet — put it back? No, can't.
+			// This means field 14 was null and we consumed field 17's token.
+			// We need to handle this differently.
+		}
+		return
+	}
+	count := r.ReadInt()
+	for i := 0; i < count; i++ {
+		// Key: String object + string value
+		keyType := r.ReadObject()
+		if keyType != "" && !isBackRef(keyType) {
+			r.ReadString()
+		} else if isBackRef(keyType) {
+			r.ReadString()
+		}
+		// Value: String object + string value
+		valType := r.ReadObject()
+		if valType != "" && !isBackRef(valType) {
+			r.ReadString()
+		} else if isBackRef(valType) {
+			r.ReadString()
+		}
+	}
+}
+
+// isBackRef returns true if the type string is a back-reference marker.
+func isBackRef(typ string) bool {
+	return strings.HasPrefix(typ, "__backref")
 }

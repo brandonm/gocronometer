@@ -36,4 +36,10 @@ const (
 	// GWTGetFood retrieves a single food's details including ingredients.
 	// Parameter: sesnonce, foodID
 	GWTGetFood = "7|0|7|https://cronometer.com/cronometer/|" + GWTHeader + "|com.cronometer.shared.rpc.CronometerService|getFood|java.lang.String/2004016611|I|%s|1|2|3|4|2|5|6|7|%d|"
+
+	// GWTGetAllFood retrieves multiple foods' details in batch.
+	// The request body is dynamically built with a variable number of food IDs.
+	// Format: 7|0|8|baseUrl|header|service|getAllFood|String|ArrayList|sesnonce|1|2|3|4|2|5|6|7|6|N|8|id1|8|id2|...|
+	// where N is the count and each id is wrapped with the Integer type reference (8).
+	GWTGetAllFoodPrefix = "7|0|8|https://cronometer.com/cronometer/|" + GWTHeader + "|com.cronometer.shared.rpc.CronometerService|getAllFood|java.lang.String/2004016611|java.util.ArrayList/4159755760|%s|java.lang.Integer/3438268394|1|2|3|4|2|5|6|7|6|"
 )

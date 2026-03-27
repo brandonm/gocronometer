@@ -456,151 +456,126 @@ func (c *Client) GetFoodIngredients(ctx context.Context, foodID int64) ([]Recipe
 	return detail.Ingredients, nil
 }
 
-// parseGetFoodResponse extracts food details from a getFood GWT response including
-// name, source, ingredients, and per-100g nutrient data.
+// GetAllFoods retrieves multiple foods' details in a single batch call.
+// This is more reliable than individual GetFood calls for resolving ingredient details,
+// as the GWT session state can cause individual calls to return mismatched data.
+func (c *Client) GetAllFoods(ctx context.Context, foodIDs []int64) (map[int64]*FoodDetail, error) {
+	if len(foodIDs) == 0 {
+		return nil, nil
+	}
+
+	// Build the dynamic GWT request body
+	// Format: prefix + count + |8|id1|8|id2|...|
+	reqBody := fmt.Sprintf(GWTGetAllFoodPrefix, c.Nonce)
+	reqBody += strconv.Itoa(len(foodIDs))
+	for _, id := range foodIDs {
+		reqBody += "|8|" + strconv.FormatInt(id, 10)
+	}
+	reqBody += "|"
+
+	req, err := c.NewGWTRequestWithContext(ctx, "POST", GWTBaseURL, strings.NewReader(reqBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed to build getAllFood request: %w", err)
+	}
+
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute getAllFood request: %w", err)
+	}
+	defer closeAndExhaustReader(resp.Body)
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("getAllFood returned status %d", resp.StatusCode)
+	}
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read getAllFood response: %w", err)
+	}
+
+	return parseGetAllFoodsResponse(string(bodyBytes), foodIDs)
+}
+
+// parseGetAllFoodsResponse extracts food details for multiple foods from a batch GWT response.
+// The response contains an ArrayList of Food objects. Uses the proper GWT deserializer.
+func parseGetAllFoodsResponse(body string, requestedIDs []int64) (map[int64]*FoodDetail, error) {
+	r, err := NewGWTReader(body)
+	if err != nil {
+		return nil, fmt.Errorf("GWT reader: %w", err)
+	}
+
+	// Outer wrapper: ArrayList of Food objects
+	outerType := r.ReadObject()
+	if outerType == "" {
+		return nil, fmt.Errorf("null response")
+	}
+
+	var foods []*GWTFood
+	if strings.Contains(outerType, "ArrayList") {
+		count := r.ReadInt()
+		for i := 0; i < count; i++ {
+			foodType := r.ReadObject()
+			if foodType == "" || !strings.Contains(foodType, "Food") {
+				return nil, fmt.Errorf("food %d: expected Food type, got %q", i, foodType)
+			}
+			food, deserErr := DeserializeFood(r)
+			if deserErr != nil {
+				return nil, fmt.Errorf("food %d: %w", i, deserErr)
+			}
+			foods = append(foods, food)
+		}
+	}
+
+	results := make(map[int64]*FoodDetail)
+	for _, food := range foods {
+		results[int64(food.ID)] = gwtFoodToDetail(food)
+	}
+	return results, nil
+}
+
+// parseGetFoodResponse extracts food details from a getFood GWT response.
+// Uses the proper GWT deserializer with verified 20-field mapping.
 func parseGetFoodResponse(body string, requestedFoodID int64) (*FoodDetail, error) {
-	strs, err := extractGWTStringTable(body)
+	r, err := NewGWTReader(body)
 	if err != nil {
-		return nil, fmt.Errorf("parsing string table: %w", err)
+		return nil, fmt.Errorf("GWT reader: %w", err)
 	}
 
-	numericData, err := extractGWTNumericData(body)
+	// Read the Food type signature
+	typeSig := r.ReadObject()
+	if typeSig == "" {
+		return nil, fmt.Errorf("null Food object in response")
+	}
+
+	food, err := DeserializeFood(r)
 	if err != nil {
-		return nil, fmt.Errorf("parsing numeric data: %w", err)
+		return nil, fmt.Errorf("deserialize food: %w", err)
 	}
 
-	detail := &FoodDetail{
-		FoodID:           requestedFoodID,
-		NutrientsPer100g: make(map[int]float64),
+	detail := gwtFoodToDetail(food)
+	// Use the requested ID as fallback if the deserialized ID is 0
+	if detail.FoodID == 0 && requestedFoodID > 0 {
+		detail.FoodID = requestedFoodID
 	}
-
-	// Extract food name and source from the string table.
-	// Strategy: look for the English translation pattern in the GWT data.
-	// Translations appear as: ..., "en", "English", "https://...flag...", "Food Display Name", ...
-	// The display name follows the English flag URL. Also look for FoodTag entries
-	// which contain a comma-separated descriptive name like "Lettuce, Green Leaf".
-	for i, s := range strs {
-		// Extract source tags
-		if stringContains(s, "NCCDB:") || stringContains(s, "CRDB:") {
-			detail.Source = s
-		}
-		// Look for English flag URL — the next non-type string is the food name
-		if stringContains(s, "cdn1.cronometer.com/media/flags/us.png") {
-			// The food name follows this URL
-			for j := i + 1; j < len(strs); j++ {
-				candidate := strs[j]
-				if candidate == "" || isGWTTypeDescriptor(candidate) {
-					continue
-				}
-				// Found the English display name
-				detail.Name = candidate
-				break
-			}
-		}
-	}
-
-	// Fallback: if no Translation-based name found, look for FoodTag pattern.
-	// FoodTag entries are comma-separated descriptive names like "Banana, Fresh".
-	if detail.Name == "" {
-		for _, s := range strs {
-			if isGWTTypeDescriptor(s) || s == "" {
-				continue
-			}
-			// A food name typically contains a comma (e.g. "Lettuce, Green Leaf")
-			// and is longer than 5 characters
-			if stringContains(s, ",") && len(s) > 5 &&
-				!stringContains(s, "http") && !stringContains(s, ".") {
-				detail.Name = s
-				break
-			}
-		}
-	}
-
-	// Extract per-100g nutrients from the numeric data.
-	// Pattern: nutrientCode, value, ... repeated throughout.
-	// In the GWT data, nutrients appear as: -20, code, value, 16, code, 15
-	// or: -21, code, value, 22, code, 21
-	// The prefix (-20 or -21) and suffix (16,code,15 or 22,code,21) vary but
-	// the pattern is: [prefix], nutrientCode, value, [suffix], nutrientCode, [suffix2]
-	for i := 0; i < len(numericData)-2; i++ {
-		// Look for the pattern: integer_code, float_value where code is a known USDA code
-		code, cerr := strconv.Atoi(numericData[i])
-		if cerr != nil {
-			// Try negative codes (Cronometer uses negative for some custom codes like -1205 = net carbs)
-			if numericData[i][0] == '-' {
-				code, cerr = strconv.Atoi(numericData[i])
-			}
-			if cerr != nil {
-				continue
-			}
-		}
-
-		// Check if this is a known nutrient code
-		if _, known := USDANutrientNames[code]; !known {
-			// Also accept the raw code for non-mapped nutrients
-			if code < 100 || code > 100000 {
-				continue
-			}
-		}
-
-		value, verr := strconv.ParseFloat(numericData[i+1], 64)
-		if verr != nil {
-			continue
-		}
-
-		// Verify by checking if the code appears again 2 positions later (GWT confirmation pattern)
-		if i+3 < len(numericData) {
-			confirmCode, _ := strconv.Atoi(numericData[i+3])
-			if confirmCode == code {
-				detail.NutrientsPer100g[code] = value
-			}
-		}
-	}
-
-	// Extract ingredients (same logic as before)
-	hasIngredientType := false
-	for _, s := range strs {
-		if stringContains(s, "Ingredient") {
-			hasIngredientType = true
-			break
-		}
-	}
-
-	if hasIngredientType {
-		for i := 0; i < len(numericData); i++ {
-			val := numericData[i]
-			if len(val) > 2 && val[0] == '"' && val[len(val)-1] == '"' {
-				hash := val[1 : len(val)-1]
-				if len(hash) < 4 || len(hash) > 12 {
-					continue
-				}
-				isHash := true
-				for _, ch := range hash {
-					if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '$' || ch == '_') {
-						isHash = false
-						break
-					}
-				}
-				if !isHash {
-					continue
-				}
-				if i >= 1 && i+2 < len(numericData) {
-					measureID, merr := strconv.ParseInt(numericData[i-1], 10, 64)
-					foodID, ferr := strconv.ParseInt(numericData[i+1], 10, 64)
-					amount, aerr := strconv.ParseFloat(numericData[i+2], 64)
-					if merr == nil && ferr == nil && aerr == nil && foodID > 0 && measureID > 100000 {
-						detail.Ingredients = append(detail.Ingredients, RecipeIngredient{
-							FoodID:    foodID,
-							MeasureID: measureID,
-							Amount:    amount,
-						})
-					}
-				}
-			}
-		}
-	}
-
 	return detail, nil
+}
+
+// gwtFoodToDetail converts a deserialized GWTFood to the FoodDetail type used by callers.
+func gwtFoodToDetail(food *GWTFood) *FoodDetail {
+	detail := &FoodDetail{
+		FoodID:           int64(food.ID),
+		Name:             food.Name,
+		Source:            food.Source,
+		NutrientsPer100g: food.Nutrients,
+	}
+	for _, ing := range food.Ingredients {
+		detail.Ingredients = append(detail.Ingredients, RecipeIngredient{
+			FoodID:    int64(ing.FoodID),
+			MeasureID: int64(ing.MeasureID),
+			Amount:    ing.Amount,
+		})
+	}
+	return detail
 }
 
 // parseGetFoodIngredients is kept for backward compatibility with tests.

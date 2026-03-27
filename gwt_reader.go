@@ -182,6 +182,16 @@ func (r *GWTReader) Skip(n int) {
 	}
 }
 
+// SavePosition returns the current read position for later restoration.
+func (r *GWTReader) SavePosition() int {
+	return r.index
+}
+
+// RestorePosition restores a previously saved read position.
+func (r *GWTReader) RestorePosition(pos int) {
+	r.index = pos
+}
+
 // StringTable returns the full string table.
 func (r *GWTReader) StringTable() []string {
 	return r.stringTable
