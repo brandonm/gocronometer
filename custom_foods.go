@@ -474,66 +474,45 @@ func parseGetFoodResponse(body string, requestedFoodID int64) (*FoodDetail, erro
 		NutrientsPer100g: make(map[int]float64),
 	}
 
-	// Extract food name from string table — it's a non-type-descriptor, non-URL,
-	// non-measure string that looks like a food name
-	for _, s := range strs {
-		if isGWTTypeDescriptor(s) || s == "" {
-			continue
-		}
-		// Skip common non-name strings
-		if s == "g" || s == "oz" || s == "cup" || s == "tbsp" || s == "tsp" || s == "ml" ||
-			s == "true" || s == "false" || s == "en" || s == "fr" || s == "de" || s == "es" ||
-			s == "English" || s == "French" || s == "German" || s == "Spanish" ||
-			s == "full recipe" || s == "Serving" || s == "advancedServingSize" ||
-			s == "Custom" || s == "custom" {
-			continue
-		}
-		// Skip URLs
-		if stringContains(s, "http") {
-			continue
-		}
-		// Skip language names (Français, Deutsch, Español)
-		if stringContains(s, "ç") || stringContains(s, "ü") || stringContains(s, "ñ") {
-			continue
-		}
-		// Food source identifiers
-		if s == "NCCDB" || s == "CRDB" {
-			continue
-		}
-		// Source tags like "NCCDB:13930"
+	// Extract food name and source from the string table.
+	// Strategy: look for the English translation pattern in the GWT data.
+	// Translations appear as: ..., "en", "English", "https://...flag...", "Food Display Name", ...
+	// The display name follows the English flag URL. Also look for FoodTag entries
+	// which contain a comma-separated descriptive name like "Lettuce, Green Leaf".
+	for i, s := range strs {
+		// Extract source tags
 		if stringContains(s, "NCCDB:") || stringContains(s, "CRDB:") {
 			detail.Source = s
-			continue
 		}
-		// UPC/barcode-like strings (all digits)
-		allDigits := true
-		for _, ch := range s {
-			if ch < '0' || ch > '9' {
-				allDigits = false
+		// Look for English flag URL — the next non-type string is the food name
+		if stringContains(s, "cdn1.cronometer.com/media/flags/us.png") {
+			// The food name follows this URL
+			for j := i + 1; j < len(strs); j++ {
+				candidate := strs[j]
+				if candidate == "" || isGWTTypeDescriptor(candidate) {
+					continue
+				}
+				// Found the English display name
+				detail.Name = candidate
 				break
 			}
 		}
-		if allDigits && len(s) > 3 {
-			continue
-		}
-		// Measure descriptions (contain common measure words)
-		if stringContains(s, "leaf") || stringContains(s, "chopped") ||
-			stringContains(s, "mashed") || stringContains(s, "sliced") ||
-			stringContains(s, "each") || stringContains(s, "doppio") ||
-			stringContains(s, "solo") || stringContains(s, "head") ||
-			stringContains(s, "Gallon") || stringContains(s, "Quart") ||
-			stringContains(s, "Pint") || stringContains(s, "Cup") ||
-			stringContains(s, "bottle") || stringContains(s, "fl oz") ||
-			stringContains(s, "Tbsp") || stringContains(s, "Cups") ||
-			stringContains(s, "slices") || stringContains(s, "kg") ||
-			stringContains(s, "lb") {
-			continue
-		}
-		// If we get here and it's a reasonable length, it's likely the food name
-		// The primary food name appears as a translation — look for patterns like
-		// "Lettuce, Green Leaf" or "Bananas, Raw"
-		if len(s) > 3 && detail.Name == "" {
-			detail.Name = s
+	}
+
+	// Fallback: if no Translation-based name found, look for FoodTag pattern.
+	// FoodTag entries are comma-separated descriptive names like "Banana, Fresh".
+	if detail.Name == "" {
+		for _, s := range strs {
+			if isGWTTypeDescriptor(s) || s == "" {
+				continue
+			}
+			// A food name typically contains a comma (e.g. "Lettuce, Green Leaf")
+			// and is longer than 5 characters
+			if stringContains(s, ",") && len(s) > 5 &&
+				!stringContains(s, "http") && !stringContains(s, ".") {
+				detail.Name = s
+				break
+			}
 		}
 	}
 

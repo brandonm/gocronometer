@@ -72,7 +72,7 @@ func main() {
 			fmt.Printf("  Nutrients (per 100g): %d entries\n", len(detail2.NutrientsPer100g))
 			for code, value := range detail2.NutrientsPer100g {
 				if info, ok := gocronometer.USDANutrientNames[code]; ok {
-					fmt.Printf("    %s: %.2f %s\n", info.Name, code, value, info.Unit)
+					fmt.Printf("    %s (code %d): %.2f %s\n", info.Name, code, value, info.Unit)
 				}
 			}
 		}
