@@ -46,6 +46,9 @@ type Client struct {
 	GWTModuleBase  string
 	GWTPermutation string
 	GWTHeader      string
+
+	// limiter caps the request rate to honor Cronometer's throttle-config.
+	limiter *rateLimiter
 }
 
 // ClientOptions represents the options that can be provided to the client. Zero values revert to the library defaults.
@@ -80,10 +83,13 @@ func (c *Client) updateOpts(opts *ClientOptions) {
 // NewClient generates a new client for the Cronometer API. If opts is nil the default values are utilized.
 func NewClient(opts *ClientOptions) *Client {
 	jar, _ := cookiejar.New(nil)
+	limiter := newRateLimiter(DefaultGWTRateLimit)
 	client := &Client{
 		HTTPClient: &http.Client{
-			Jar: jar,
+			Jar:       jar,
+			Transport: &rateLimitedTransport{base: http.DefaultTransport, limiter: limiter},
 		},
+		limiter:        limiter,
 		GWTContentType: GWTContentType,
 		GWTModuleBase:  GWTModuleBase,
 		GWTPermutation: GWTPermutation,
@@ -222,6 +228,10 @@ func (c *Client) Login(ctx context.Context, username string, password string) er
 	if err != nil {
 		return fmt.Errorf("failed to authenticate with GWT: %s", err)
 	}
+
+	// Honor Cronometer's published rate limits: tune our limiter to the live
+	// gwt_rpc throttle (best-effort; the conservative default stays if it fails).
+	c.applyThrottleConfig(ctx)
 
 	return nil
 }
