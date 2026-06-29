@@ -8,6 +8,5 @@
 testdata/dayinfo-local.txt
 .dayinfo-dump.txt
 
-# local infisical project link + compiled debug binaries
+# local infisical project link (never commit)
 .infisical.json
-/debug_export
