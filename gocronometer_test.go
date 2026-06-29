@@ -2,7 +2,6 @@ package gocronometer_test
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -10,24 +9,25 @@ import (
 	"github.com/jrmycanady/gocronometer"
 )
 
-// setup perform some basic actions to setup testing.
-func setup() (username string, password string, client *gocronometer.Client, err error) {
+// setup performs some basic actions to set up testing. These are live integration
+// tests that hit the real Cronometer API, so the test is skipped when the
+// GOCRONOMETER_TEST_USERNAME/PASSWORD env vars are not set (e.g. in CI without
+// secrets). Set both to run them against your own account. The returned error is
+// always nil on success; it is retained for the existing call-site signatures.
+func setup(t *testing.T) (username string, password string, client *gocronometer.Client, err error) {
+	t.Helper()
 	username = os.Getenv("GOCRONOMETER_TEST_USERNAME")
 	password = os.Getenv("GOCRONOMETER_TEST_PASSWORD")
 
-	if username == "" {
-		return "", "", nil, fmt.Errorf("username is empty, is GOCRONOMETER_TEST_USERNAME set")
-	}
-
-	if password == "" {
-		return "", "", nil, fmt.Errorf("password is empty, is GOCRONOMETER_TEST_PASSWORD set")
+	if username == "" || password == "" {
+		t.Skip("set GOCRONOMETER_TEST_USERNAME and GOCRONOMETER_TEST_PASSWORD to run live API tests")
 	}
 
 	return username, password, gocronometer.NewClient(nil), nil
 }
 
 func TestClient_ObtainAntiCSRF(t *testing.T) {
-	_, _, client, err := setup()
+	_, _, client, err := setup(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +43,7 @@ func TestClient_ObtainAntiCSRF(t *testing.T) {
 }
 
 func TestClient_Login(t *testing.T) {
-	username, password, client, err := setup()
+	username, password, client, err := setup(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +56,7 @@ func TestClient_Login(t *testing.T) {
 }
 
 func TestClient_Login_BadCreds(t *testing.T) {
-	username, _, client, err := setup()
+	username, _, client, err := setup(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +67,7 @@ func TestClient_Login_BadCreds(t *testing.T) {
 }
 
 func TestClient_GenerateAuthToken(t *testing.T) {
-	username, password, client, err := setup()
+	username, password, client, err := setup(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +93,7 @@ func TestClient_GenerateAuthToken(t *testing.T) {
 }
 
 func TestClient_ExportBiometrics(t *testing.T) {
-	username, password, client, err := setup()
+	username, password, client, err := setup(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +115,7 @@ func TestClient_ExportBiometrics(t *testing.T) {
 }
 
 func TestClient_ExportDailyNutrition(t *testing.T) {
-	username, password, client, err := setup()
+	username, password, client, err := setup(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestClient_ExportDailyNutrition(t *testing.T) {
 }
 
 func TestClient_ExportNotes(t *testing.T) {
-	username, password, client, err := setup()
+	username, password, client, err := setup(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +158,7 @@ func TestClient_ExportNotes(t *testing.T) {
 }
 
 func TestClient_ExportServings(t *testing.T) {
-	username, password, client, err := setup()
+	username, password, client, err := setup(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +180,7 @@ func TestClient_ExportServings(t *testing.T) {
 }
 
 func TestClient_ExportExercises(t *testing.T) {
-	username, password, client, err := setup()
+	username, password, client, err := setup(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +201,7 @@ func TestClient_ExportExercises(t *testing.T) {
 }
 
 func TestClient_ExportServingsParsed(t *testing.T) {
-	username, password, client, err := setup()
+	username, password, client, err := setup(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +223,7 @@ func TestClient_ExportServingsParsed(t *testing.T) {
 }
 
 func TestClient_ExportDailyNutritionParsed(t *testing.T) {
-	username, password, client, err := setup()
+	username, password, client, err := setup(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +245,7 @@ func TestClient_ExportDailyNutritionParsed(t *testing.T) {
 }
 
 func TestClient_ExportExercisesParsed(t *testing.T) {
-	username, password, client, err := setup()
+	username, password, client, err := setup(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,7 +267,7 @@ func TestClient_ExportExercisesParsed(t *testing.T) {
 }
 
 func TestClient_ExportBiometricRecordsParsed(t *testing.T) {
-	username, password, client, err := setup()
+	username, password, client, err := setup(t)
 	if err != nil {
 		t.Fatal(err)
 	}
