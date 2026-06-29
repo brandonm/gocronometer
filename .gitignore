@@ -1,1 +1,13 @@
 /export_data.csv
+
+# local Cronometer test credentials (never commit)
+.cronometer-creds
+
+# local personal diary capture (never commit — contains real health data)
+.getdayinfo-sample.txt
+testdata/dayinfo-local.txt
+.dayinfo-dump.txt
+
+# local infisical project link + compiled debug binaries
+.infisical.json
+/debug_export

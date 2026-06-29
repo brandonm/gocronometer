@@ -37,6 +37,17 @@ const (
 	// Parameter: sesnonce, foodID
 	GWTGetFood = "7|0|7|https://cronometer.com/cronometer/|" + GWTHeader + "|com.cronometer.shared.rpc.CronometerService|getFood|java.lang.String/2004016611|I|%s|1|2|3|4|2|5|6|7|%d|"
 
+	// GWTGetDayInfo retrieves a single day's diary — the servings (food log) the web app
+	// loads via CronometerService.getDayInfo, replacing the rate-limited CSV /export path.
+	// (The response also carries biometrics + exercise, which we ignore — Apple Health covers those.)
+	//
+	// Params (in order): sesnonce, day, month (1-based), year, userID.
+	// Layout note: the "6" right after the sesnonce ref is the string-table ref to the Day type;
+	// the Day object then serializes as day|month|year (verified against captured web requests,
+	// e.g. 2026-06-28 -> ...|8|6|28|6|2026|<userID>|).
+	GWTGetDayInfo = "7|0|8|https://cronometer.com/cronometer/|" + GWTHeader + "|com.cronometer.shared.rpc.CronometerService|getDayInfo" +
+		"|java.lang.String/2004016611|com.cronometer.shared.entries.models.Day/782579793|I|%s|1|2|3|4|3|5|6|7|8|6|%d|%d|%d|%s|"
+
 	// GWTGetAllFood retrieves multiple foods' details in batch.
 	// The request body is dynamically built with a variable number of food IDs.
 	// Format: 7|0|8|baseUrl|header|service|getAllFood|String|ArrayList|sesnonce|1|2|3|4|2|5|6|7|6|N|8|id1|8|id2|...|

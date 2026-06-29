@@ -35,6 +35,16 @@ type FoodDetail struct {
 	// NutrientsPer100g contains nutrient data keyed by USDA nutrient code.
 	// Values are per 100g. Scale by (amount/100) for actual serving.
 	NutrientsPer100g map[int]float64
+	// Measures maps a measure ID to its weight in grams, used to convert a
+	// serving's amount (in measure units, e.g. "1 full recipe") into grams.
+	Measures []FoodMeasure
+}
+
+// FoodMeasure is a serving-size measure for a food (e.g. "g" = 1g, "full recipe" = 100.7g).
+type FoodMeasure struct {
+	ID    int64
+	Name  string
+	Grams float64
 }
 
 // FoodExport represents the nutrient data from a food CSV export.
@@ -573,6 +583,13 @@ func gwtFoodToDetail(food *GWTFood) *FoodDetail {
 			FoodID:    int64(ing.FoodID),
 			MeasureID: int64(ing.MeasureID),
 			Amount:    ing.Amount,
+		})
+	}
+	for _, m := range food.Measures {
+		detail.Measures = append(detail.Measures, FoodMeasure{
+			ID:    int64(m.ID),
+			Name:  m.Name,
+			Grams: m.Grams,
 		})
 	}
 	return detail
