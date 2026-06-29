@@ -52,6 +52,6 @@ func main() {
 		if f := foods[s.FoodID]; f != nil && f.Name != "" {
 			name = f.Name
 		}
-		fmt.Printf("  %2d. amount=%-7g foodID=%-10d %s\n", i+1, s.Amount, s.FoodID, name)
+		fmt.Printf("  %2d. meal=%d amount=%-7g foodID=%-10d %s\n", i+1, s.MealGroup, s.Amount, s.FoodID, name)
 	}
 }

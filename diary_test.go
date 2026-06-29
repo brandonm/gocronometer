@@ -31,14 +31,23 @@ func TestParseDayInfoServings_LocalFixture(t *testing.T) {
 	if len(servings) == 0 {
 		t.Fatal("expected servings from the populated fixture")
 	}
-	// Verified live: foodID 69796849 == "Mocha (20oz)" at amount 1.0.
-	var sawMocha bool
+	// Verified live: foodID 69796849 == "Mocha (20oz)", amount 1.0, Breakfast (meal 1).
+	var sawMocha, sawWater bool
 	for _, s := range servings {
 		if s.FoodID == 69796849 && s.Amount == 1.0 {
 			sawMocha = true
+			if s.MealGroup != 1 {
+				t.Errorf("Mocha mealGroup = %d (%s), want 1 (Breakfast)", s.MealGroup, MealGroupName(s.MealGroup))
+			}
+		}
+		if s.FoodID == 27536487 && s.MealGroup == 6 { // Water
+			sawWater = true
 		}
 	}
 	if !sawMocha {
 		t.Errorf("expected the Mocha serving (foodID 69796849, amount 1.0) — field mapping off")
+	}
+	if !sawWater {
+		t.Errorf("expected Water servings in meal group 6 — meal mapping off")
 	}
 }

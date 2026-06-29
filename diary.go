@@ -21,7 +21,27 @@ type DayServing struct {
 	FoodID    int64     // Cronometer food ID (resolve nutrients via GetAllFoods)
 	Amount    float64   // quantity in the measure's units (grams when MeasureID is the gram measure)
 	MeasureID int64     // which measure the amount is expressed in
+	MealGroup int       // meal category index (1=Breakfast, 2=Lunch, 3=Dinner, 4=Snacks, 5=Supplements, …)
 	Date      time.Time // the diary day this serving belongs to (date only)
+}
+
+// mealGroupNames maps Cronometer's meal-group index to its display name.
+var mealGroupNames = map[int]string{
+	1: "Breakfast",
+	2: "Lunch",
+	3: "Dinner",
+	4: "Snacks",
+	5: "Supplements",
+	6: "Water",
+}
+
+// MealGroupName returns the display name for a serving's MealGroup index,
+// or "Uncategorized" for unknown/zero.
+func MealGroupName(group int) string {
+	if n, ok := mealGroupNames[group]; ok {
+		return n
+	}
+	return "Uncategorized"
 }
 
 // GetDayInfoRaw returns the raw GWT-RPC getDayInfo response for a date. Exposed
@@ -94,6 +114,19 @@ func parseDayInfoServings(body string, day time.Time, userID string) ([]DayServi
 	// Scanning for this signature sidesteps deserializing the biometric/exercise
 	// objects that precede the servings list, and is robust to the variable serving
 	// size (some servings embed an object back-ref that shifts field positions).
+	// The Serving type's string-table index — each serving begins with this type
+	// token. The row-ID field (which encodes the meal in its high 16 bits) is a
+	// FIXED 8 tokens after the type token, even when a serving's back-ref shifts
+	// the later fields. So we anchor the meal to the type token and the
+	// foodID/amount to the signature.
+	servTok := ""
+	for i, s := range r.StringTable() {
+		if strings.Contains(s, "models.Serving") {
+			servTok = strconv.Itoa(i + 1)
+			break
+		}
+	}
+
 	toks := r.Tokens()
 	var servings []DayServing
 	seen := make(map[string]bool)
@@ -116,13 +149,28 @@ func parseDayInfoServings(body string, day time.Time, userID string) ([]DayServi
 			continue
 		}
 		seen[hashTok] = true
-		// The token just past the longhash (read-order) is the serving's measure ID,
-		// used to convert amount → grams via the food's measures.
+
 		var measureID int64
 		if i-4 >= 0 {
 			measureID, _ = strconv.ParseInt(toks[i-4], 10, 64)
 		}
-		servings = append(servings, DayServing{FoodID: foodID, Amount: amount, MeasureID: measureID, Date: day})
+		// Meal group: locate this serving's type token (scan up from userID — it's
+		// ~10-13 tokens above), then read the row-ID 8 tokens after it.
+		mealGroup := 0
+		if servTok != "" {
+			for k := i + 1; k <= i+18 && k < len(toks); k++ {
+				if toks[k] == servTok {
+					if k-8 >= 0 {
+						if rowID, e := strconv.ParseInt(toks[k-8], 10, 64); e == nil {
+							mealGroup = int(rowID >> 16)
+						}
+					}
+					break
+				}
+			}
+		}
+
+		servings = append(servings, DayServing{FoodID: foodID, Amount: amount, MeasureID: measureID, MealGroup: mealGroup, Date: day})
 	}
 	return servings, nil
 }
