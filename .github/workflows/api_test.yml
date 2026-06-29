@@ -2,9 +2,9 @@ name: API Test
 
 on:
   push:
-    branches: [ master ]
+    branches: [ main ]
   pull_request:
-    branches: [ master ]
+    branches: [ main ]
   schedule:
     - cron: "1 23 * * 1"
   workflow_dispatch:
