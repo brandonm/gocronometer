@@ -17,6 +17,11 @@ type GWTFood struct {
 	Source       string // e.g. "NCCDB:13930", "CRDB", "Custom"
 	Translations map[string]string // language code → translated name
 	UserID       int
+
+	// fallbackName is the first translated name seen in stream order, used
+	// when the preferred languages are unavailable (e.g. a back-referenced
+	// Language object whose code could not be recovered).
+	fallbackName string
 }
 
 // GWTIngredient represents a recipe ingredient.
@@ -32,7 +37,28 @@ type GWTMeasure struct {
 	FoodID int
 	Name   string
 	Grams  float64 // grams per unit of this measure
+	// MilliL is the measure's volume in milliliters. Only present in the
+	// post-2026-07-16 Measure layout, and only for volume measures ("cup",
+	// "Gallon", ...); 0 otherwise.
+	MilliL float64
 }
+
+// Measure type descriptors pin the known serialization vintages. The trailing
+// hash changes whenever Cronometer recompiles the class with different fields,
+// so an unknown hash means an unknown field layout — deserializeMeasure treats
+// it as a hard error rather than walking the stream blind (the silent-husk
+// failure mode of the 2026-07-16 incident).
+const (
+	// measureTypeOld is the layout Cronometer served until 2026-07-16.
+	measureTypeOld = "com.cronometer.shared.foods.models.Measure/824760657"
+	// measureTypeNew is the layout observed from 2026-07-16 onward (adds a
+	// nullable java.lang.Double milliliter volume field).
+	measureTypeNew = "com.cronometer.shared.foods.models.Measure/1410168823"
+	// derivedMeasureType is a Measure subclass introduced alongside
+	// measureTypeNew (volume-derived measures like "Gallon", "Quart", "Cup");
+	// observed 2026-07-17 with the same field walk as measureTypeNew.
+	derivedMeasureType = "com.cronometer.shared.measurement.DerivedMeasure/338216045"
+)
 
 // DeserializeFood reads a Food object from the GWT stream.
 // Must be called after ReadObject() returns the Food type signature.
@@ -90,9 +116,13 @@ func DeserializeFood(r *GWTReader) (*GWTFood, error) {
 	// Field 11 (o): long — timestamp
 	r.ReadLong()
 	// Field 12 (p): object — FoodMeasures
-	deserializeFoodMeasures(r, f)
+	if err := deserializeFoodMeasures(r, f); err != nil {
+		return f, fmt.Errorf("measures: %w", err)
+	}
 	// Field 13 (q): object — NutrientMap
-	deserializeNutrientMap(r, f)
+	if err := deserializeNutrientMap(r, f); err != nil {
+		return f, fmt.Errorf("nutrients: %w", err)
+	}
 	// Field 14 (s): object — properties HashMap<String,String> (skip)
 	skipStringHashMap(r)
 	// Field 15 (t): double — unknown
@@ -113,6 +143,15 @@ func DeserializeFood(r *GWTReader) (*GWTFood, error) {
 		f.Name = en
 	} else if de, ok := f.Translations["de"]; ok && de != "" {
 		f.Name = de
+	} else {
+		f.Name = f.fallbackName
+	}
+
+	// A zero food ID means the fixed-field walk drifted off the stream (every
+	// real food carries its ID at field 8). Surface it instead of returning a
+	// husk the caller can't distinguish from data.
+	if f.ID == 0 {
+		return f, fmt.Errorf("food stream misaligned: deserialized food ID is 0")
 	}
 
 	return f, nil
@@ -161,42 +200,62 @@ func deserializeIngredient(r *GWTReader) (GWTIngredient, error) {
 }
 
 // deserializeFoodMeasures reads a FoodMeasures object containing an ArrayList of Measure.
-func deserializeFoodMeasures(r *GWTReader, f *GWTFood) {
+func deserializeFoodMeasures(r *GWTReader, f *GWTFood) error {
 	typ := r.ReadObject()
 	if typ == "" || isBackRef(typ) {
-		return
+		return nil
 	}
 	// FoodMeasures: int(defaultMeasureID) + ReadObject(ArrayList of Measure)
 	r.ReadInt() // default measure ID
 
 	measListType := r.ReadObject()
 	if measListType == "" || isBackRef(measListType) {
-		return
+		return nil
 	}
 	count := r.ReadInt()
 	for i := 0; i < count; i++ {
-		m := deserializeMeasure(r)
-		f.Measures = append(f.Measures, m)
+		m, err := deserializeMeasure(r)
+		if err != nil {
+			return fmt.Errorf("measure %d: %w", i, err)
+		}
+		if m.ID != 0 {
+			f.Measures = append(f.Measures, m)
+		}
 	}
+	return nil
 }
 
-// deserializeMeasure reads a single Measure from the stream.
-// Measure has 8 fields: double(?), double(grams), int(foodID), int(measureID),
-// object(Measure$Type enum), string(name), object(Measure$Type), double(weight)
-func deserializeMeasure(r *GWTReader) GWTMeasure {
+// deserializeMeasure reads a single Measure from the stream, dispatching on
+// the type descriptor's serialization hash. An unrecognized hash is a hard
+// error: it means Cronometer recompiled the class with a different field
+// layout and any fixed walk would silently misalign the rest of the stream.
+func deserializeMeasure(r *GWTReader) (GWTMeasure, error) {
 	typeSig := r.ReadObject()
 	if typeSig == "" || isBackRef(typeSig) {
-		return GWTMeasure{}
+		return GWTMeasure{}, nil
 	}
 
-	r.ReadDouble()          // field 1: unknown
-	r.ReadDouble()          // field 2: grams per unit (but often 0?)
-	foodID := r.ReadInt()   // field 3: food ID
+	switch typeSig {
+	case measureTypeOld:
+		return deserializeMeasureOld(r), nil
+	case measureTypeNew, derivedMeasureType:
+		return deserializeMeasureNew(r)
+	}
+	return GWTMeasure{}, fmt.Errorf("unknown Measure vintage %q — Cronometer layout change, re-capture the wire format", typeSig)
+}
+
+// deserializeMeasureOld reads the pre-2026-07-16 Measure layout.
+// Measure has 8 fields: double(?), double(grams), int(foodID), int(measureID),
+// object(Measure$Type enum), string(name), object(Measure$Type), double(weight)
+func deserializeMeasureOld(r *GWTReader) GWTMeasure {
+	r.ReadDouble()           // field 1: unknown
+	r.ReadDouble()           // field 2: grams per unit (but often 0?)
+	foodID := r.ReadInt()    // field 3: food ID
 	measureID := r.ReadInt() // field 4: measure ID
-	skipEnum(r)             // field 5: Measure$Type enum
-	name := r.ReadString()  // field 6: name ("g", "full recipe", etc.)
-	skipEnumOrBackRef(r)    // field 7: Measure$Type (usually backref)
-	grams := r.ReadDouble() // field 8: weight in grams
+	skipEnum(r)              // field 5: Measure$Type enum
+	name := r.ReadString()   // field 6: name ("g", "full recipe", etc.)
+	skipEnumOrBackRef(r)     // field 7: Measure$Type (usually backref)
+	grams := r.ReadDouble()  // field 8: weight in grams
 
 	return GWTMeasure{
 		ID:     measureID,
@@ -206,12 +265,57 @@ func deserializeMeasure(r *GWTReader) GWTMeasure {
 	}
 }
 
+// deserializeMeasureNew reads the post-2026-07-16 Measure layout (hash
+// 1410168823, shared by the DerivedMeasure subclass). Verified against the
+// 2026-07-17 getAllFood captures in testdata/ — e.g. "Gallon" carries
+// Double 3785.411784 (ml per US gallon), "cup" of espresso carries a null ml
+// and grams 236.803875:
+//
+//	 1  double  — unknown (always 1.0 in captures)
+//	 2  int     — unknown (0 or 1; PROVISIONAL — never observed as an object)
+//	 3  int     — food ID
+//	 4  int     — unknown (always 0; PROVISIONAL — never observed non-zero)
+//	 5  int     — measure ID
+//	 6  object  — java.lang.Double: volume in ml (null for non-volume measures)
+//	 7  string  — name ("cup", "Gallon", "g", "full recipe", …)
+//	 8  object  — Measure$Type enum (type+ordinal, or backref)
+//	 9  double  — weight in grams
+func deserializeMeasureNew(r *GWTReader) (GWTMeasure, error) {
+	r.ReadDouble()           // field 1: unknown
+	r.ReadInt()              // field 2: unknown
+	foodID := r.ReadInt()    // field 3: food ID
+	r.ReadInt()              // field 4: unknown
+	measureID := r.ReadInt() // field 5: measure ID
+
+	// Field 6: nullable java.lang.Double — volume in milliliters.
+	var ml float64
+	mlType := r.ReadObject()
+	if mlType != "" && !isBackRef(mlType) {
+		if !strings.Contains(mlType, "Double") {
+			return GWTMeasure{}, fmt.Errorf("measure stream misaligned: expected java.lang.Double at ml field, got %q", mlType)
+		}
+		ml = r.ReadDouble()
+	}
+
+	name := r.ReadString()  // field 7: name
+	skipEnumOrBackRef(r)    // field 8: Measure$Type enum
+	grams := r.ReadDouble() // field 9: weight in grams
+
+	return GWTMeasure{
+		ID:     measureID,
+		FoodID: foodID,
+		Name:   name,
+		Grams:  grams,
+		MilliL: ml,
+	}, nil
+}
+
 // deserializeNutrientMap reads a NutrientMap from the stream.
 // Structure: NutrientFilter enum + HashMap<Integer(code), Nutrient(value, code, Nutrient$Type)>
-func deserializeNutrientMap(r *GWTReader, f *GWTFood) {
+func deserializeNutrientMap(r *GWTReader, f *GWTFood) error {
 	typ := r.ReadObject()
 	if typ == "" || isBackRef(typ) {
-		return
+		return nil
 	}
 
 	// NutrientFilter enum
@@ -220,7 +324,7 @@ func deserializeNutrientMap(r *GWTReader, f *GWTFood) {
 	// HashMap
 	mapType := r.ReadObject()
 	if mapType == "" || isBackRef(mapType) {
-		return
+		return nil
 	}
 
 	count := r.ReadInt()
@@ -251,6 +355,11 @@ func deserializeNutrientMap(r *GWTReader, f *GWTFood) {
 		if isBackRef(valType) {
 			continue
 		}
+		if !strings.Contains(valType, "models.Nutrient/") {
+			// A different class where a Nutrient belongs means the layout
+			// changed — walking it blind would corrupt every later field.
+			return fmt.Errorf("nutrient map misaligned: expected Nutrient value, got %q", valType)
+		}
 		value := r.ReadDouble()
 		r.ReadInt() // nutrient code (duplicated)
 		// Nutrient$Type enum (first occurrence is new, rest are backrefs)
@@ -263,6 +372,7 @@ func deserializeNutrientMap(r *GWTReader, f *GWTFood) {
 			f.Nutrients[code] = value
 		}
 	}
+	return nil
 }
 
 // deserializeTranslationList reads an ArrayList of Translation objects.
@@ -277,8 +387,14 @@ func deserializeTranslationList(r *GWTReader, f *GWTFood) {
 	count := r.ReadInt()
 	for i := 0; i < count; i++ {
 		lang, name := deserializeTranslation(r)
-		if lang != "" {
+		if lang != "" && !isBackRef(lang) {
 			f.Translations[lang] = name
+		}
+		// Keep the first name seen regardless of language so a food whose
+		// preferred-language Language object arrived as a back-reference
+		// (code unrecoverable) still resolves to a real name.
+		if f.fallbackName == "" && name != "" {
+			f.fallbackName = name
 		}
 	}
 }
@@ -291,24 +407,31 @@ func deserializeTranslation(r *GWTReader) (langCode string, translatedName strin
 		return "", ""
 	}
 
-	// Language object (NOT an enum): 1 field which is a Locale-like inner object
+	// Language object (NOT an enum): 1 field which is a Locale-like inner object.
+	//
+	// Since the 2026-07-16 format the server reuses Language instances across
+	// foods, so this can be a back-reference (observed: two foods sharing one
+	// "de" instance). A back-reference carries no inner tokens and the code is
+	// unrecoverable without full object-identity tracking — but the
+	// Translation's remaining fields (name string, int) are still on the
+	// stream and MUST be consumed, or every later field misaligns (this exact
+	// early-return previously shifted the stream by 2 tokens per backref).
 	langType := r.ReadObject()
-	if langType == "" || isBackRef(langType) {
-		return "", ""
-	}
-	// Language inner object token resolves to the language code ("en", "fr", "de")
-	// The inner object then has 3 string fields: displayName, flagURL, localizedName
-	code := r.ReadObject() // type token = language code string
-	if code != "" && !isBackRef(code) {
-		r.ReadString() // displayName ("English")
-		r.ReadString() // flagURL
-		r.ReadString() // localizedName ("English")
+	if langType != "" && !isBackRef(langType) {
+		// Language inner object token resolves to the language code ("en", "fr", "de")
+		// The inner object then has 3 string fields: displayName, flagURL, localizedName
+		langCode = r.ReadObject() // type token = language code string
+		if langCode != "" && !isBackRef(langCode) {
+			r.ReadString() // displayName ("English")
+			r.ReadString() // flagURL
+			r.ReadString() // localizedName ("English")
+		}
 	}
 
 	translatedName = r.ReadString()
 	r.ReadInt() // unknown
 
-	return code, translatedName
+	return langCode, translatedName
 }
 
 // skipArrayList reads and discards an ArrayList and all its elements.

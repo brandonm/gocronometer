@@ -525,12 +525,17 @@ func parseGetAllFoodsResponse(body string, requestedIDs []int64) (map[int64]*Foo
 		count := r.ReadInt()
 		for i := 0; i < count; i++ {
 			foodType := r.ReadObject()
-			if foodType == "" || !strings.Contains(foodType, "Food") {
+			// Require the Food class itself — a Contains("Food") check would
+			// also accept FoodMeasures/FoodTag/FoodType and walk garbage.
+			if foodType == "" || !strings.Contains(foodType, "models.Food/") {
 				return nil, fmt.Errorf("food %d: expected Food type, got %q", i, foodType)
 			}
 			food, deserErr := DeserializeFood(r)
 			if deserErr != nil {
 				return nil, fmt.Errorf("food %d: %w", i, deserErr)
+			}
+			if food.Name == "" {
+				return nil, fmt.Errorf("food %d (id %d): deserialized with empty name — stream misaligned or unknown layout", i, food.ID)
 			}
 			foods = append(foods, food)
 		}
@@ -545,6 +550,12 @@ func parseGetAllFoodsResponse(body string, requestedIDs []int64) (map[int64]*Foo
 
 // parseGetFoodResponse extracts food details from a getFood GWT response.
 // Uses the proper GWT deserializer with verified 20-field mapping.
+//
+// Fails loudly on anything that is not a well-formed Food: wrong response
+// type, empty name, or an ID that doesn't match the request. Before
+// 2026-07-17 this function accepted any parseable stream and backfilled the
+// requested ID, which converted the 2026-07-16 Cronometer layout change into
+// silently-inserted empty foods downstream.
 func parseGetFoodResponse(body string, requestedFoodID int64) (*FoodDetail, error) {
 	r, err := NewGWTReader(body)
 	if err != nil {
@@ -556,18 +567,24 @@ func parseGetFoodResponse(body string, requestedFoodID int64) (*FoodDetail, erro
 	if typeSig == "" {
 		return nil, fmt.Errorf("null Food object in response")
 	}
+	if !strings.Contains(typeSig, "models.Food/") {
+		return nil, fmt.Errorf("expected Food type, got %q", typeSig)
+	}
 
 	food, err := DeserializeFood(r)
 	if err != nil {
 		return nil, fmt.Errorf("deserialize food: %w", err)
 	}
-
-	detail := gwtFoodToDetail(food)
-	// Use the requested ID as fallback if the deserialized ID is 0
-	if detail.FoodID == 0 && requestedFoodID > 0 {
-		detail.FoodID = requestedFoodID
+	if food.Name == "" {
+		return nil, fmt.Errorf("food %d: deserialized with empty name — stream misaligned or unknown layout", food.ID)
 	}
-	return detail, nil
+	// The GWT session is known to occasionally return data for a different
+	// food than requested (the reason GetAllFoods exists) — reject it.
+	if requestedFoodID > 0 && int64(food.ID) != requestedFoodID {
+		return nil, fmt.Errorf("food ID mismatch: requested %d, got %d (GWT session state)", requestedFoodID, food.ID)
+	}
+
+	return gwtFoodToDetail(food), nil
 }
 
 // gwtFoodToDetail converts a deserialized GWTFood to the FoodDetail type used by callers.
