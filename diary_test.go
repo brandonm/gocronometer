@@ -51,3 +51,51 @@ func TestParseDayInfoServings_LocalFixture(t *testing.T) {
 		t.Errorf("expected Water servings in meal group 6 — meal mapping off")
 	}
 }
+
+func TestMealGroupFromServingSignature(t *testing.T) {
+	tests := []struct {
+		name      string
+		tokens    []string
+		userIndex int
+		want      int
+	}{
+		{
+			name:      "older short serving layout",
+			tokens:    []string{"user", "0", "327688", "0", "1", "1", "2026", "6", "28", "2", "30"},
+			userIndex: 0,
+			want:      5,
+		},
+		{
+			name:      "current serving layout",
+			tokens:    []string{"user", "0", "48", "13", "15", "327710", "12", "1", "1", "2026", "8", "17", "2", "26"},
+			userIndex: 0,
+			want:      5,
+		},
+		{
+			name:      "current layout with optional token before type marker",
+			tokens:    []string{"user", "0", "48", "13", "15", "327711", "-420", "12", "1", "1", "2026", "8", "17", "2", "26"},
+			userIndex: 0,
+			want:      5,
+		},
+		{
+			name:      "unknown group",
+			tokens:    []string{"user", "0", "48", "13", "15", "458753"},
+			userIndex: 0,
+			want:      0,
+		},
+		{
+			name:      "short serving",
+			tokens:    []string{"user", "0"},
+			userIndex: 0,
+			want:      0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := mealGroupFromServingSignature(tt.tokens, tt.userIndex); got != tt.want {
+				t.Fatalf("mealGroupFromServingSignature() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}

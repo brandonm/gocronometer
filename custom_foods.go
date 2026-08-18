@@ -49,73 +49,73 @@ type FoodMeasure struct {
 
 // FoodExport represents the nutrient data from a food CSV export.
 type FoodExport struct {
-	FoodID   int64
-	FoodName string
-	Amount   string
+	FoodID    int64
+	FoodName  string
+	Amount    string
 	Nutrients map[string]float64 // nutrient name -> value (raw from CSV)
 }
 
 // USDANutrientNames maps USDA nutrient codes to human-readable names and units.
 var USDANutrientNames = map[int]struct{ Name, Unit string }{
-	208:  {"calories", "kcal"},
-	203:  {"protein", "g"},
-	205:  {"carbs", "g"},
-	204:  {"fat", "g"},
-	291:  {"fiber", "g"},
-	269:  {"sugar", "g"},
+	208:   {"calories", "kcal"},
+	203:   {"protein", "g"},
+	205:   {"carbs", "g"},
+	204:   {"fat", "g"},
+	291:   {"fiber", "g"},
+	269:   {"sugar", "g"},
 	10009: {"added_sugars", "g"},
 	10005: {"sugar_alcohol", "g"},
 	// -1205 is net carbs in Cronometer's system
-	606:  {"saturated_fat", "g"},
-	645:  {"monounsaturated_fat", "g"},
-	646:  {"polyunsaturated_fat", "g"},
-	605:  {"trans_fat", "g"},
-	601:  {"cholesterol", "mg"},
-	307:  {"sodium", "mg"},
-	306:  {"potassium", "mg"},
-	301:  {"calcium", "mg"},
-	303:  {"iron", "mg"},
-	304:  {"magnesium", "mg"},
-	305:  {"phosphorus", "mg"},
-	309:  {"zinc", "mg"},
-	312:  {"copper", "mg"},
-	315:  {"manganese", "mg"},
-	317:  {"selenium", "mcg"},
+	606: {"saturated_fat", "g"},
+	645: {"monounsaturated_fat", "g"},
+	646: {"polyunsaturated_fat", "g"},
+	605: {"trans_fat", "g"},
+	601: {"cholesterol", "mg"},
+	307: {"sodium", "mg"},
+	306: {"potassium", "mg"},
+	301: {"calcium", "mg"},
+	303: {"iron", "mg"},
+	304: {"magnesium", "mg"},
+	305: {"phosphorus", "mg"},
+	309: {"zinc", "mg"},
+	312: {"copper", "mg"},
+	315: {"manganese", "mg"},
+	317: {"selenium", "mcg"},
 	// 324: vitamin_a (IU)
-	320:  {"vitamin_a", "mcg"},
-	401:  {"vitamin_c", "mg"},
-	324:  {"vitamin_d", "IU"},
-	323:  {"vitamin_e", "mg"},
-	430:  {"vitamin_k", "mcg"},
-	404:  {"b1_thiamine", "mg"},
-	405:  {"b2_riboflavin", "mg"},
-	406:  {"b3_niacin", "mg"},
-	410:  {"b5_pantothenic", "mg"},
-	415:  {"b6", "mg"},
-	418:  {"b12", "mcg"},
-	417:  {"folate", "mcg"},
-	421:  {"choline", "mg"},
+	320: {"vitamin_a", "mcg"},
+	401: {"vitamin_c", "mg"},
+	324: {"vitamin_d", "IU"},
+	323: {"vitamin_e", "mg"},
+	430: {"vitamin_k", "mcg"},
+	404: {"b1_thiamine", "mg"},
+	405: {"b2_riboflavin", "mg"},
+	406: {"b3_niacin", "mg"},
+	410: {"b5_pantothenic", "mg"},
+	415: {"b6", "mg"},
+	418: {"b12", "mcg"},
+	417: {"folate", "mcg"},
+	421: {"choline", "mg"},
 	// 435: biotin
-	502:  {"cystine", "g"},
-	512:  {"histidine", "g"},
-	503:  {"isoleucine", "g"},
-	504:  {"leucine", "g"},
-	505:  {"lysine", "g"},
-	506:  {"methionine", "g"},
-	508:  {"phenylalanine", "g"},
-	507:  {"threonine", "g"},
-	501:  {"tryptophan", "g"},
-	509:  {"tyrosine", "g"},
-	510:  {"valine", "g"},
-	262:  {"caffeine", "mg"},
-	255:  {"water", "g"},
-	518:  {"omega_3", "g"},
+	502: {"cystine", "g"},
+	512: {"histidine", "g"},
+	503: {"isoleucine", "g"},
+	504: {"leucine", "g"},
+	505: {"lysine", "g"},
+	506: {"methionine", "g"},
+	508: {"phenylalanine", "g"},
+	507: {"threonine", "g"},
+	501: {"tryptophan", "g"},
+	509: {"tyrosine", "g"},
+	510: {"valine", "g"},
+	262: {"caffeine", "mg"},
+	255: {"water", "g"},
+	518: {"omega_3", "g"},
 	// omega_6 varies
 }
 
 // FindMyFoods returns all custom foods for the logged-in user.
 func (c *Client) FindMyFoods(ctx context.Context) ([]CustomFood, error) {
-	reqBody := fmt.Sprintf(GWTFindMyFoods, c.Nonce, c.UserID)
+	reqBody := c.formatGWTRequest(GWTFindMyFoods, c.Nonce, c.UserID)
 
 	req, err := c.NewGWTRequestWithContext(ctx, "POST", GWTBaseURL, strings.NewReader(reqBody))
 	if err != nil {
@@ -432,7 +432,7 @@ func ParseFoodExport(csvData string) (*FoodExport, error) {
 
 // GetFood retrieves a single food's details including ingredients and per-100g nutrients.
 func (c *Client) GetFood(ctx context.Context, foodID int64) (*FoodDetail, error) {
-	reqBody := fmt.Sprintf(GWTGetFood, c.Nonce, foodID)
+	reqBody := c.formatGWTRequest(GWTGetFood, c.Nonce, foodID)
 
 	req, err := c.NewGWTRequestWithContext(ctx, "POST", GWTBaseURL, strings.NewReader(reqBody))
 	if err != nil {
@@ -476,7 +476,7 @@ func (c *Client) GetAllFoods(ctx context.Context, foodIDs []int64) (map[int64]*F
 
 	// Build the dynamic GWT request body
 	// Format: prefix + count + |8|id1|8|id2|...|
-	reqBody := fmt.Sprintf(GWTGetAllFoodPrefix, c.Nonce)
+	reqBody := c.formatGWTRequest(GWTGetAllFoodPrefix, c.Nonce)
 	reqBody += strconv.Itoa(len(foodIDs))
 	for _, id := range foodIDs {
 		reqBody += "|8|" + strconv.FormatInt(id, 10)
@@ -592,7 +592,7 @@ func gwtFoodToDetail(food *GWTFood) *FoodDetail {
 	detail := &FoodDetail{
 		FoodID:           int64(food.ID),
 		Name:             food.Name,
-		Source:            food.Source,
+		Source:           food.Source,
 		NutrientsPer100g: food.Nutrients,
 	}
 	for _, ing := range food.Ingredients {

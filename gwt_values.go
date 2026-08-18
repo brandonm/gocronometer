@@ -7,20 +7,19 @@ const (
 	GWTContentType = "text/x-gwt-rpc; charset=UTF-8"
 	GWTModuleBase  = "https://cronometer.com/cronometer/"
 	// GWTPermutation is the X-GWT-Permutation header value. Captured live from
-	// the web app on 2026-07-17 (previous value 2E2ADC7983FC786FB6AFF6B9B2FEA5AF
-	// stopped matching after Cronometer's 2026-07-16 deploy).
-	GWTPermutation = "6B907FFD872F5DEE50BB42A45CEFDDDD"
+	// the public web app bootstrap on 2026-08-18.
+	GWTPermutation = "4C7D8A09214684EA9C02C3EEF2BDA94B"
 
 	// GWTHeader is what appears to be a hash value that is provided at the beginning of every GWT request. As it
 	// changes with app updates it appears to be related to validating the version the requester is expecting.
-	// Captured live 2026-07-17 (previous value DA19253CB693C806016C64754CF28FFF).
+	// Captured live from the public serialization policy on 2026-08-18.
 	//
 	// To re-capture both values after a Cronometer deploy: open cronometer.com
 	// in a browser with devtools (or Playwright), log in, and inspect any POST
 	// to /cronometer/app — the request body's second |-separated field is
 	// GWTHeader, and the x-gwt-permutation request header is GWTPermutation.
 	// Both are also overridable at runtime via ClientOptions.
-	GWTHeader = "8119D24F8CC7814B83B62DD87A7C62D8"
+	GWTHeader = "2E3E30F9D70C26E99BDA65200BB15C64"
 )
 
 // The following are the GWT procedure calls as found from inspection of the app.

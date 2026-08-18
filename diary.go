@@ -54,7 +54,7 @@ func (c *Client) GetDayInfoRaw(ctx context.Context, date time.Time) (string, err
 	}
 
 	// Day serializes as day|month|year (month 1-based), userID is the trailing int param.
-	reqBody := fmt.Sprintf(GWTGetDayInfo, c.Nonce, date.Day(), int(date.Month()), date.Year(), c.UserID)
+	reqBody := c.formatGWTRequest(GWTGetDayInfo, c.Nonce, date.Day(), int(date.Month()), date.Year(), c.UserID)
 
 	req, err := c.NewGWTRequestWithContext(ctx, "POST", GWTBaseURL, strings.NewReader(reqBody))
 	if err != nil {
@@ -114,19 +114,6 @@ func parseDayInfoServings(body string, day time.Time, userID string) ([]DayServi
 	// Scanning for this signature sidesteps deserializing the biometric/exercise
 	// objects that precede the servings list, and is robust to the variable serving
 	// size (some servings embed an object back-ref that shifts field positions).
-	// The Serving type's string-table index — each serving begins with this type
-	// token. The row-ID field (which encodes the meal in its high 16 bits) is a
-	// FIXED 8 tokens after the type token, even when a serving's back-ref shifts
-	// the later fields. So we anchor the meal to the type token and the
-	// foodID/amount to the signature.
-	servTok := ""
-	for i, s := range r.StringTable() {
-		if strings.Contains(s, "models.Serving") {
-			servTok = strconv.Itoa(i + 1)
-			break
-		}
-	}
-
 	toks := r.Tokens()
 	var servings []DayServing
 	seen := make(map[string]bool)
@@ -154,23 +141,36 @@ func parseDayInfoServings(body string, day time.Time, userID string) ([]DayServi
 		if i-4 >= 0 {
 			measureID, _ = strconv.ParseInt(toks[i-4], 10, 64)
 		}
-		// Meal group: locate this serving's type token (scan up from userID — it's
-		// ~10-13 tokens above), then read the row-ID 8 tokens after it.
-		mealGroup := 0
-		if servTok != "" {
-			for k := i + 1; k <= i+18 && k < len(toks); k++ {
-				if toks[k] == servTok {
-					if k-8 >= 0 {
-						if rowID, e := strconv.ParseInt(toks[k-8], 10, 64); e == nil {
-							mealGroup = int(rowID >> 16)
-						}
-					}
-					break
-				}
-			}
-		}
+		mealGroup := mealGroupFromServingSignature(toks, i)
 
 		servings = append(servings, DayServing{FoodID: foodID, Amount: amount, MeasureID: measureID, MealGroup: mealGroup, Date: day})
 	}
 	return servings, nil
+}
+
+// mealGroupFromServingSignature extracts the category from a serving's row ID.
+// The row ID's high 16 bits are the meal group. Its position is not stable:
+// observed Serving layouts put it two or five read-order tokens after the user
+// ID, and optional fields can move the later Serving type marker independently.
+// Scan the bounded remainder of the Serving instead of anchoring either offset.
+func mealGroupFromServingSignature(tokens []string, userIndex int) int {
+	if userIndex < 0 || userIndex >= len(tokens) {
+		return 0
+	}
+	const maxServingTokens = 18
+	end := userIndex + maxServingTokens
+	if end >= len(tokens) {
+		end = len(tokens) - 1
+	}
+	for i := userIndex + 1; i <= end; i++ {
+		rowID, err := strconv.ParseInt(tokens[i], 10, 64)
+		if err != nil || rowID <= 0 {
+			continue
+		}
+		group := int(rowID >> 16)
+		if _, ok := mealGroupNames[group]; ok {
+			return group
+		}
+	}
+	return 0
 }

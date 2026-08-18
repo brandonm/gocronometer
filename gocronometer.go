@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/net/html"
@@ -47,6 +48,11 @@ type Client struct {
 	GWTPermutation string
 	GWTHeader      string
 
+	disableGWTWireCheck bool
+	onGWTWireStatus     func(GWTWireStatus)
+	wireMu              sync.RWMutex
+	wireStatus          GWTWireStatus
+
 	// limiter caps the request rate to honor Cronometer's throttle-config.
 	limiter *rateLimiter
 }
@@ -57,6 +63,14 @@ type ClientOptions struct {
 	GWTModuleBase  string
 	GWTPermutation string
 	GWTHeader      string
+
+	// DisableGWTWireCheck skips automatic discovery of Cronometer's public GWT
+	// build and serialization policy during Login. The check is enabled by
+	// default so incompatible schema changes fail before collection.
+	DisableGWTWireCheck bool
+	// OnGWTWireStatus receives every successfully discovered status, including
+	// incompatible ones. Callers can persist it and raise operational alerts.
+	OnGWTWireStatus func(GWTWireStatus)
 }
 
 // updateOpts updates the client with the opts provided
@@ -78,6 +92,8 @@ func (c *Client) updateOpts(opts *ClientOptions) {
 	if opts.GWTHeader != "" {
 		c.GWTHeader = opts.GWTHeader
 	}
+	c.disableGWTWireCheck = opts.DisableGWTWireCheck
+	c.onGWTWireStatus = opts.OnGWTWireStatus
 }
 
 // NewClient generates a new client for the Cronometer API. If opts is nil the default values are utilized.
@@ -93,11 +109,25 @@ func NewClient(opts *ClientOptions) *Client {
 		GWTContentType: GWTContentType,
 		GWTModuleBase:  GWTModuleBase,
 		GWTPermutation: GWTPermutation,
+		GWTHeader:      GWTHeader,
 	}
 
 	client.updateOpts(opts)
 
 	return client
+}
+
+// formatGWTRequest applies the client's live or explicitly overridden
+// serialization-policy strong name to a request template. Historically the
+// exported templates embedded the compiled default, which made the GWTHeader
+// ClientOption ineffective.
+func (c *Client) formatGWTRequest(template string, args ...any) string {
+	body := fmt.Sprintf(template, args...)
+	header := c.GWTHeader
+	if header == "" {
+		header = GWTHeader
+	}
+	return strings.Replace(body, "|"+GWTHeader+"|", "|"+header+"|", 1)
 }
 
 // NewGWTRequestWithContext creates a new http request with the proper headers for a GWT request.
@@ -178,6 +208,12 @@ type LoginResponse struct {
 
 // Login logs into the Cronometer and the GWT API. Nil is returned on login success.
 func (c *Client) Login(ctx context.Context, username string, password string) error {
+	if !c.disableGWTWireCheck {
+		if _, err := c.RefreshGWTWireStatus(ctx); err != nil {
+			return fmt.Errorf("check GWT wire compatibility: %w", err)
+		}
+	}
+
 	// Obtaining a new anticsrf from the login page.
 	antiCSRF, err := c.ObtainAntiCSRF(ctx)
 	if err != nil {
@@ -252,7 +288,7 @@ func (c *Client) updateSesnonce(resp *http.Response) {
 // Logout logs out from the API.
 func (c *Client) Logout(ctx context.Context) error {
 	// Building the request.
-	reqBody := fmt.Sprintf(GWTLogout, c.Nonce)
+	reqBody := c.formatGWTRequest(GWTLogout, c.Nonce)
 
 	req, err := c.NewGWTRequestWithContext(ctx, "POST", GWTBaseURL, strings.NewReader(reqBody))
 	if err != nil {
@@ -282,9 +318,8 @@ func (c *Client) Logout(ctx context.Context) error {
 // in most cases this should never be called directly.
 func (c *Client) GWTAuthenticate(ctx context.Context) error {
 	// Building and sending the request.
-	//reqBody := fmt.Sprintf(GWTAuthenticate, c.Nonce)
-
-	req, err := c.NewGWTRequestWithContext(ctx, "POST", GWTBaseURL, strings.NewReader(GWTAuthenticate))
+	reqBody := c.formatGWTRequest(GWTAuthenticate)
+	req, err := c.NewGWTRequestWithContext(ctx, "POST", GWTBaseURL, strings.NewReader(reqBody))
 	if err != nil {
 		return fmt.Errorf("failed while building http request for gwt authentication: %s", err)
 	}
@@ -324,7 +359,7 @@ func (c *Client) GWTAuthenticate(ctx context.Context) error {
 func (c *Client) GenerateAuthToken(ctx context.Context) (string, error) {
 
 	// Building the request.
-	reqBody := fmt.Sprintf(GWTGenerateAuthToken, c.Nonce, c.UserID)
+	reqBody := c.formatGWTRequest(GWTGenerateAuthToken, c.Nonce, c.UserID)
 
 	req, err := c.NewGWTRequestWithContext(ctx, "POST", GWTBaseURL, strings.NewReader(reqBody))
 	if err != nil {

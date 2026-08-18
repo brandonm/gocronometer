@@ -169,8 +169,20 @@ The `*Parsed` helpers (`ExportServingsParsed`, etc.) export and parse in one cal
 
 This library mimics the GWT HTTP requests Cronometer's deployed GWT application makes.
 Several values can only be obtained by loading the application itself, and they change
-over time with application updates. The library ships the values as of its last push;
-new values can be provided via the `ClientOptions` parameter of `NewClient`.
+over time with application updates. The library ships known-good defaults, but `Login`
+also discovers the live permutation and serialization policy from Cronometer's public
+GWT assets before authenticating.
+
+Compatible application rebuilds are adopted automatically. The library compares the
+serialization signatures of every class it decodes; if a watched layout changed,
+`Login` returns `*GWTWireIncompatibleError` before collecting diary data. The observed
+`GWTWireStatus` includes the live build identifiers, watched class hashes, a stable
+schema fingerprint, and the incompatible classes (if any).
+
+Call `RefreshGWTWireStatus` to repeat the check on a long-lived client, or inspect the
+last result with `GWTWireStatus`. `ClientOptions.OnGWTWireStatus` can persist or report
+every discovered status. `DisableGWTWireCheck` exists for controlled offline use; it
+removes the pre-login compatibility guard.
 
 | Name | Location | Changes |
 |---|---|---|
@@ -178,6 +190,10 @@ new values can be provided via the `ClientOptions` parameter of `NewClient`.
 | `GWTModuleBase` | Request header. | false |
 | `GWTPermutation` | Request header. | true |
 | `GWTHeader` | GWT request body. | true |
+
+Explicit `GWTPermutation` and `GWTHeader` options remain useful for tests and emergency
+overrides. With the default compatibility check enabled, compatible live values replace
+those request identifiers during login.
 
 ---
 
