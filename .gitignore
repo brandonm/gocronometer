@@ -10,3 +10,4 @@ testdata/dayinfo-local.txt
 
 # local infisical project link (never commit)
 .infisical.json
+probe-out*/
