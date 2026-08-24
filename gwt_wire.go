@@ -33,11 +33,11 @@ var knownGWTClassSignatures = map[string][]string{
 	"com.cronometer.shared.foods.models.Food":          {"2097636843"},
 	"com.cronometer.shared.foods.models.FoodMeasures":  {"2106205728"},
 	"com.cronometer.shared.foods.models.Ingredient":    {"1280520736"},
-	"com.cronometer.shared.foods.models.Measure":       {"824760657", "1410168823"},
+	"com.cronometer.shared.foods.models.Measure":       {"824760657", "1410168823", "1979099908"},
 	"com.cronometer.shared.foods.models.Nutrient":      {"331784102"},
 	"com.cronometer.shared.foods.models.NutrientMap":   {"168231382"},
 	"com.cronometer.shared.foods.models.Translation":   {"4034452093"},
-	"com.cronometer.shared.measurement.DerivedMeasure": {"338216045"},
+	"com.cronometer.shared.measurement.DerivedMeasure": {"338216045", "4214796590"},
 }
 
 // GWTClassSignatureChange describes a watched serialized class whose live

@@ -14,7 +14,7 @@ type GWTFood struct {
 	Name         string
 	Description  string
 	Measures     []GWTMeasure
-	Source       string // e.g. "NCCDB:13930", "CRDB", "Custom"
+	Source       string            // e.g. "NCCDB:13930", "CRDB", "Custom"
 	Translations map[string]string // language code → translated name
 	UserID       int
 
@@ -48,16 +48,26 @@ type GWTMeasure struct {
 // so an unknown hash means an unknown field layout — deserializeMeasure treats
 // it as a hard error rather than walking the stream blind (the silent-husk
 // failure mode of the 2026-07-16 incident).
+//
+// DerivedMeasure is a Measure subclass whose serialized form is byte-identical
+// to its parent's: in the compiled GWT permutation the generated deserialize
+// functions for the two classes are literally the same code. A GWT class hash
+// also covers the supertype chain, so every Measure field change moves the
+// DerivedMeasure hash too — the pair always advances together.
 const (
-	// measureTypeOld is the layout Cronometer served until 2026-07-16.
-	measureTypeOld = "com.cronometer.shared.foods.models.Measure/824760657"
-	// measureTypeNew is the layout observed from 2026-07-16 onward (adds a
-	// nullable java.lang.Double milliliter volume field).
-	measureTypeNew = "com.cronometer.shared.foods.models.Measure/1410168823"
-	// derivedMeasureType is a Measure subclass introduced alongside
-	// measureTypeNew (volume-derived measures like "Gallon", "Quart", "Cup");
-	// observed 2026-07-17 with the same field walk as measureTypeNew.
-	derivedMeasureType = "com.cronometer.shared.measurement.DerivedMeasure/338216045"
+	// measureTypeV1 is the layout Cronometer served until 2026-07-16.
+	measureTypeV1 = "com.cronometer.shared.foods.models.Measure/824760657"
+
+	// measureTypeV2 is the layout served from 2026-07-16: V1 plus a nullable
+	// java.lang.Double volume-in-millilitres field.
+	measureTypeV2        = "com.cronometer.shared.foods.models.Measure/1410168823"
+	derivedMeasureTypeV2 = "com.cronometer.shared.measurement.DerivedMeasure/338216045"
+
+	// measureTypeV3 is the layout served from 2026-08-24: V2 plus a Map of
+	// localized measure-name translations, inserted between the name string
+	// and the Measure$Type enum.
+	measureTypeV3        = "com.cronometer.shared.foods.models.Measure/1979099908"
+	derivedMeasureTypeV3 = "com.cronometer.shared.measurement.DerivedMeasure/4214796590"
 )
 
 // DeserializeFood reads a Food object from the GWT stream.
@@ -236,18 +246,20 @@ func deserializeMeasure(r *GWTReader) (GWTMeasure, error) {
 	}
 
 	switch typeSig {
-	case measureTypeOld:
-		return deserializeMeasureOld(r), nil
-	case measureTypeNew, derivedMeasureType:
-		return deserializeMeasureNew(r)
+	case measureTypeV1:
+		return deserializeMeasureV1(r), nil
+	case measureTypeV2, derivedMeasureTypeV2:
+		return deserializeMeasureFields(r, false)
+	case measureTypeV3, derivedMeasureTypeV3:
+		return deserializeMeasureFields(r, true)
 	}
 	return GWTMeasure{}, fmt.Errorf("unknown Measure vintage %q — Cronometer layout change, re-capture the wire format", typeSig)
 }
 
-// deserializeMeasureOld reads the pre-2026-07-16 Measure layout.
+// deserializeMeasureV1 reads the pre-2026-07-16 Measure layout.
 // Measure has 8 fields: double(?), double(grams), int(foodID), int(measureID),
 // object(Measure$Type enum), string(name), object(Measure$Type), double(weight)
-func deserializeMeasureOld(r *GWTReader) GWTMeasure {
+func deserializeMeasureV1(r *GWTReader) GWTMeasure {
 	r.ReadDouble()           // field 1: unknown
 	r.ReadDouble()           // field 2: grams per unit (but often 0?)
 	foodID := r.ReadInt()    // field 3: food ID
@@ -265,29 +277,34 @@ func deserializeMeasureOld(r *GWTReader) GWTMeasure {
 	}
 }
 
-// deserializeMeasureNew reads the post-2026-07-16 Measure layout (hash
-// 1410168823, shared by the DerivedMeasure subclass). Verified against the
-// 2026-07-17 getAllFood captures in testdata/ — e.g. "Gallon" carries
-// Double 3785.411784 (ml per US gallon), "cup" of espresso carries a null ml
-// and grams 236.803875:
+// deserializeMeasureFields reads a Measure body. The V2 and V3 layouts differ
+// by exactly one field, so both share this walk; withTranslations selects V3.
+// Field order was recovered from the compiled GWT permutation's generated
+// deserializer and confirmed against live captures in testdata/ — a "Gallon"
+// DerivedMeasure carries Double 3785.411784 (ml per US gallon) while a "g"
+// Measure carries a null ml.
 //
 //	 1  double  — unknown (always 1.0 in captures)
-//	 2  int     — unknown (0 or 1; PROVISIONAL — never observed as an object)
+//	 2  boolean — unknown (0 or 1)
 //	 3  int     — food ID
-//	 4  int     — unknown (always 0; PROVISIONAL — never observed non-zero)
+//	 4  boolean — unknown (0 or 1)
 //	 5  int     — measure ID
 //	 6  object  — java.lang.Double: volume in ml (null for non-volume measures)
 //	 7  string  — name ("cup", "Gallon", "g", "full recipe", …)
-//	 8  object  — Measure$Type enum (type+ordinal, or backref)
-//	 9  double  — weight in grams
-func deserializeMeasureNew(r *GWTReader) (GWTMeasure, error) {
+//	 8  object  — V3 ONLY: Map of localized measure-name translations
+//	 9  object  — Measure$Type enum (type+ordinal, or backref)
+//	10  double  — weight in grams
+//
+// Fields 2 and 4 are booleans in the compiled serializer (GWT writes them as
+// the same 0/1 token an int uses, so reading them as ints stays aligned).
+func deserializeMeasureFields(r *GWTReader, withTranslations bool) (GWTMeasure, error) {
 	r.ReadDouble()           // field 1: unknown
-	r.ReadInt()              // field 2: unknown
+	r.ReadInt()              // field 2: unknown boolean
 	foodID := r.ReadInt()    // field 3: food ID
-	r.ReadInt()              // field 4: unknown
+	r.ReadInt()              // field 4: unknown boolean
 	measureID := r.ReadInt() // field 5: measure ID
 
-	// Field 6: nullable java.lang.Double — volume in milliliters.
+	// Field 6: nullable java.lang.Double — volume in millilitres.
 	var ml float64
 	mlType := r.ReadObject()
 	if mlType != "" && !isBackRef(mlType) {
@@ -297,9 +314,17 @@ func deserializeMeasureNew(r *GWTReader) (GWTMeasure, error) {
 		ml = r.ReadDouble()
 	}
 
-	name := r.ReadString()  // field 7: name
-	skipEnumOrBackRef(r)    // field 8: Measure$Type enum
-	grams := r.ReadDouble() // field 9: weight in grams
+	name := r.ReadString() // field 7: name
+
+	if withTranslations {
+		// Field 8: Map<?, MeasureTranslation> of localized measure names.
+		if err := skipMeasureTranslations(r); err != nil {
+			return GWTMeasure{}, err
+		}
+	}
+
+	skipEnumOrBackRef(r)    // field 9: Measure$Type enum
+	grams := r.ReadDouble() // field 10: weight in grams
 
 	return GWTMeasure{
 		ID:     measureID,
@@ -308,6 +333,30 @@ func deserializeMeasureNew(r *GWTReader) (GWTMeasure, error) {
 		Grams:  grams,
 		MilliL: ml,
 	}, nil
+}
+
+// skipMeasureTranslations consumes the V3 measure-name translation map.
+//
+// Every measure observed on 2026-08-24 carried an empty map, so the entry
+// layout has never been seen on the wire. Rather than guess at it and risk the
+// silent misalignment that produced the 2026-07-16 husks, a non-empty map is a
+// hard, actionable error: re-capture the wire format and decode it for real.
+//
+// For whoever gets that error: the value type is almost certainly
+// MeasureTranslation/3000345244, whose compiled deserializer reads four fields
+// — object (a Language), int, long, string.
+func skipMeasureTranslations(r *GWTReader) error {
+	typeSig := r.ReadObject()
+	if typeSig == "" || isBackRef(typeSig) {
+		return nil
+	}
+	if !strings.Contains(typeSig, "Map") {
+		return fmt.Errorf("measure stream misaligned: expected a Map at the translations field, got %q", typeSig)
+	}
+	if n := r.ReadInt(); n != 0 {
+		return fmt.Errorf("measure translations map has %d entries — this layout has only ever been observed empty; re-capture the wire format and decode it before trusting the stream", n)
+	}
+	return nil
 }
 
 // deserializeNutrientMap reads a NutrientMap from the stream.
