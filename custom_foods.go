@@ -57,32 +57,70 @@ type FoodExport struct {
 
 // USDANutrientNames maps USDA nutrient codes to human-readable names and units.
 var USDANutrientNames = map[int]struct{ Name, Unit string }{
+	// Every entry below was verified against Cronometer's own food-detail panel
+	// by matching cached per-100g values for a known food. Do not add a code on
+	// the strength of a USDA table alone: three entries in the first version of
+	// this map were wrong for five months because they were never checked
+	// against what Cronometer actually returns.
+
+	// General
 	208:   {"calories", "kcal"},
-	203:   {"protein", "g"},
-	205:   {"carbs", "g"},
-	204:   {"fat", "g"},
+	207:   {"ash", "g"},
+	255:   {"water", "g"},
+	262:   {"caffeine", "mg"},
+	10012: {"oxalate", "mg"},
+
+	// Macronutrients
+	203: {"protein", "g"},
+	204: {"fat", "g"},
+	205: {"carbs", "g"},
+
+	// Carbohydrates
 	291:   {"fiber", "g"},
 	269:   {"sugar", "g"},
 	10009: {"added_sugars", "g"},
-	10005: {"sugar_alcohol", "g"},
-	// -1205 is net carbs in Cronometer's system
-	606: {"saturated_fat", "g"},
-	645: {"monounsaturated_fat", "g"},
-	646: {"polyunsaturated_fat", "g"},
-	605: {"trans_fat", "g"},
-	601: {"cholesterol", "mg"},
-	307: {"sodium", "mg"},
-	306: {"potassium", "mg"},
-	301: {"calcium", "mg"},
-	303: {"iron", "mg"},
-	304: {"magnesium", "mg"},
-	305: {"phosphorus", "mg"},
-	309: {"zinc", "mg"},
-	312: {"copper", "mg"},
-	315: {"manganese", "mg"},
-	317: {"selenium", "mcg"},
-	// 324: vitamin_a (IU)
+	// 10007, not 10005 — 10005 is iodine. Cronometer's panel for a food with a
+	// non-zero 10007 shows it under "Sugar Alcohol"; 10005 lines up with Iodine.
+	10007: {"sugar_alcohol", "g"},
+
+	// Lipids
+	606:   {"saturated_fat", "g"},
+	645:   {"monounsaturated_fat", "g"},
+	646:   {"polyunsaturated_fat", "g"},
+	605:   {"trans_fat", "g"},
+	601:   {"cholesterol", "mg"},
+	10001: {"omega_3", "g"},
+	10002: {"omega_6", "g"},
+	// Omega-3 and omega-6 subfractions. EPA and DHA are the marine forms that
+	// carry the cardiovascular evidence; total omega_3 also contains ALA, which
+	// converts poorly, so the total alone cannot answer "am I getting enough".
+	629: {"epa", "g"},
+	621: {"dha", "g"},
+	675: {"la_linoleic", "g"},
+	853: {"aa_arachidonic", "g"},
+
+	// Minerals
+	307:   {"sodium", "mg"},
+	306:   {"potassium", "mg"},
+	301:   {"calcium", "mg"},
+	303:   {"iron", "mg"},
+	304:   {"magnesium", "mg"},
+	305:   {"phosphorus", "mg"},
+	309:   {"zinc", "mg"},
+	312:   {"copper", "mg"},
+	315:   {"manganese", "mg"},
+	317:   {"selenium", "mcg"},
+	10005: {"iodine", "mcg"},
+
+	// Vitamins
+	// 320 is vitamin A as RAE, 319 is preformed retinol and 321 is beta-carotene.
+	// The relationship RAE = retinol + beta_carotene/12 holds exactly in the
+	// data, which is what distinguishes them: a plant food has 320 > 0 with
+	// 319 = 0. 318 (vitamin A in IU) is deliberately absent — admitting both it
+	// and 320 would sum international units into micrograms.
 	320: {"vitamin_a", "mcg"},
+	319: {"retinol", "mcg"},
+	321: {"beta_carotene", "mcg"},
 	401: {"vitamin_c", "mg"},
 	324: {"vitamin_d", "IU"},
 	323: {"vitamin_e", "mg"},
@@ -95,22 +133,26 @@ var USDANutrientNames = map[int]struct{ Name, Unit string }{
 	418: {"b12", "mcg"},
 	417: {"folate", "mcg"},
 	421: {"choline", "mg"},
-	// 435: biotin
-	502: {"cystine", "g"},
-	512: {"histidine", "g"},
+
+	// Amino acids. The block runs 501-518 contiguously in USDA numbering.
+	501: {"tryptophan", "g"},
+	502: {"threonine", "g"},
 	503: {"isoleucine", "g"},
 	504: {"leucine", "g"},
 	505: {"lysine", "g"},
 	506: {"methionine", "g"},
+	507: {"cystine", "g"},
 	508: {"phenylalanine", "g"},
-	507: {"threonine", "g"},
-	501: {"tryptophan", "g"},
 	509: {"tyrosine", "g"},
 	510: {"valine", "g"},
-	262: {"caffeine", "mg"},
-	255: {"water", "g"},
-	518: {"omega_3", "g"},
-	// omega_6 varies
+	511: {"arginine", "g"},
+	512: {"histidine", "g"},
+	513: {"alanine", "g"},
+	514: {"aspartic_acid", "g"},
+	515: {"glutamic_acid", "g"},
+	516: {"glycine", "g"},
+	517: {"proline", "g"},
+	518: {"serine", "g"},
 }
 
 // FindMyFoods returns all custom foods for the logged-in user.
