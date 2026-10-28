@@ -4,13 +4,10 @@ gocronometer is a GPLv2-licensed Go module that provides a client for reading yo
 own data out of [Cronometer](https://cronometer.com). It speaks the same unpublished
 JSON API the Cronometer phone app uses (`mobile.cronometer.com/api/v2`).
 
-> **This is [@brandonm](https://github.com/brandonm)'s fork** of upstream
-> `jrmycanady/gocronometer` (v1.5.1). Upstream scraped the web app and its CSV
-> export; this fork replaces all of that with a client for the mobile API, which
-> adds quota-free diary reading, custom-food/recipe resolution, and automatic rate
-> limiting. The module path is kept as `github.com/jrmycanady/gocronometer` so it
-> drops into existing code via a `replace` directive — see
-> [Using this fork](#using-this-fork).
+> Originally derived from [`jrmycanady/gocronometer`](https://github.com/jrmycanady/gocronometer),
+> which scraped the web app and its CSV export. Since v2 this is an independent
+> module: a client for the mobile API with quota-free diary reading,
+> custom-food/recipe resolution, and automatic rate limiting.
 
 **IMPORTANT:** This module uses the same API the Cronometer app uses. For that reason
 it should only be used by single users wanting to read/back-up their *own* personal
@@ -31,27 +28,22 @@ reader (2026-07-16, 2026-08-24, 2026-10-28). The mobile API carries named JSON
 fields and has to keep serving app builds users have not updated, so it changes far
 less abruptly — and it announces sunsets in a response header ahead of time.
 
-**v1.9.0 removed the web/GWT client** (`Client`, `NewClient`, the GWT decoders, and
-the CSV `Export*` calls, which depended on the web login). The CSV `Parse*`
-functions remain for exports obtained elsewhere.
+**v2.0.0 removed the web/GWT client** (`Client`, `NewClient`, the GWT decoders, and
+the CSV `Export*` calls, which depended on the web login) and moved the module to
+its own path, `github.com/brandonm/gocronometer/v2`. The CSV `Parse*` functions
+remain for exports obtained elsewhere. v1.x was published under the upstream path
+`github.com/jrmycanady/gocronometer` and consumed through a `replace` directive.
 
 ---
 
 ## Install
 
-### Using this fork
-
-The module keeps the upstream path, so point your `go.mod` at this fork with a
-`replace` directive and import the original path:
-
-```
-// go.mod
-require github.com/jrmycanady/gocronometer v1.5.1
-replace github.com/jrmycanady/gocronometer => github.com/brandonm/gocronometer v1.9.0
+```bash
+go get github.com/brandonm/gocronometer/v2
 ```
 
 ```go
-import "github.com/jrmycanady/gocronometer"
+import "github.com/brandonm/gocronometer/v2" // package gocronometer
 ```
 
 ---
@@ -166,4 +158,4 @@ GOCRONOMETER_MOBILE_PROBE=1 GOCRONOMETER_TEST_USERNAME=... GOCRONOMETER_TEST_PAS
 
 ## License
 
-GPLv2. Forked from [jrmycanady/gocronometer](https://github.com/jrmycanady/gocronometer).
+GPLv2. Originally derived from [jrmycanady/gocronometer](https://github.com/jrmycanady/gocronometer).
