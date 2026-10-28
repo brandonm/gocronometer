@@ -14,12 +14,7 @@ const (
 	// ThrottleConfigURL returns Cronometer's published per-API rate limits (rps).
 	ThrottleConfigURL = "https://cronometer.com/api/v3/throttle-config"
 
-	// DefaultGWTRateLimit is the requests/second cap used before the live
-	// throttle-config is fetched. Deliberately well under the observed gwt_rpc
-	// limit of 40 rps so we never approach it.
-	DefaultGWTRateLimit = 20.0
-
-	// ThrottleSafetyFactor is the fraction of Cronometer's published gwt_rpc rps
+	// ThrottleSafetyFactor is the fraction of Cronometer's published API rps
 	// we actually use, leaving headroom so concurrent web/app sessions and clock
 	// skew can't push us over the real limit.
 	ThrottleSafetyFactor = 0.5
@@ -102,11 +97,6 @@ type ThrottleConfig struct {
 	} `json:"apis"`
 }
 
-// GetThrottleConfig fetches Cronometer's current published rate-limit config.
-func (c *Client) GetThrottleConfig(ctx context.Context) (*ThrottleConfig, error) {
-	return fetchThrottleConfig(ctx, c.HTTPClient, ThrottleConfigURL)
-}
-
 // fetchThrottleConfig fetches the published rate-limit config from url.
 func fetchThrottleConfig(ctx context.Context, hc *http.Client, url string) (*ThrottleConfig, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
@@ -130,20 +120,4 @@ func fetchThrottleConfig(ctx context.Context, hc *http.Client, url string) (*Thr
 		return nil, fmt.Errorf("throttle-config decode: %w", err)
 	}
 	return &tc, nil
-}
-
-// applyThrottleConfig fetches the live config and sets the client's rate limiter
-// to ThrottleSafetyFactor of the published gwt_rpc limit. Best-effort: on any
-// failure the conservative default rate stays in effect.
-func (c *Client) applyThrottleConfig(ctx context.Context) {
-	if c.limiter == nil {
-		return
-	}
-	tc, err := c.GetThrottleConfig(ctx)
-	if err != nil || tc == nil {
-		return
-	}
-	if api, ok := tc.APIs["gwt_rpc"]; ok && api.Global.RPS > 0 {
-		c.limiter.SetRate(api.Global.RPS * ThrottleSafetyFactor)
-	}
 }

@@ -49,8 +49,7 @@ const (
 // APIContractError reports a mobile API response that does not have the shape
 // this client was built against — a missing or renamed field, an empty value
 // where one is required, or a record for something other than what was asked
-// for. It is the mobile counterpart of GWTWireIncompatibleError: nothing from
-// the response should be imported.
+// for. Nothing from the response should be imported.
 type APIContractError struct {
 	Endpoint string // e.g. "get_foods"
 	Field    string // e.g. "nutrients[].amount"
@@ -97,8 +96,7 @@ type MobileClientOptions struct {
 	OnDeprecation func(DeprecationNotice)
 }
 
-// MobileClient is a Cronometer client for the mobile JSON API. It returns the
-// same types as the GWT Client so callers can switch between them.
+// MobileClient is a Cronometer client for the mobile JSON API.
 type MobileClient struct {
 	httpClient        *http.Client
 	limiter           *rateLimiter
@@ -678,4 +676,12 @@ func (c *MobileClient) FindMyFoods(ctx context.Context) ([]CustomFood, error) {
 	c.ownedKinds = kinds
 	c.mu.Unlock()
 	return out, nil
+}
+
+// closeAndExhaustReader drains and closes a response body so the connection
+// can be reused. Errors are ignored: it only runs deferred, where there is no
+// action to take on failure.
+func closeAndExhaustReader(r io.ReadCloser) {
+	_, _ = io.Copy(io.Discard, r)
+	_ = r.Close()
 }

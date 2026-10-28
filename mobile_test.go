@@ -3,9 +3,10 @@ package gocronometer
 // Tests for MobileClient against live mobile.cronometer.com/api/v2 responses
 // captured on 2026-10-28 for the diary day 2026-10-27 (testdata/mobile-*.json,
 // user ID replaced with 10000001, biometric/exercise entries replaced by
-// synthetic placeholders). The same day was captured over GWT; the GWT
-// fixtures in testdata/*2026-10-food-v2.txt are the cross-check for every
-// value asserted here.
+// synthetic placeholders). The same day was captured over the web app's
+// GWT-RPC API before this library dropped it; testdata/golden-gwt-*.json
+// freeze what that decoder returned, and are the independent cross-check for
+// every value asserted here.
 
 import (
 	"context"
@@ -131,6 +132,14 @@ func fixtureWithout(t *testing.T, path string, mutate func(map[string]any)) stri
 	mutate(doc)
 	out, _ := json.Marshal(doc)
 	return string(out)
+}
+
+// loadGolden decodes a frozen GWT-era decode from testdata.
+func loadGolden(t *testing.T, path string, v any) {
+	t.Helper()
+	if err := json.Unmarshal([]byte(loadFixture(t, path)), v); err != nil {
+		t.Fatalf("decode %s: %v", path, err)
+	}
 }
 
 func asContractError(t *testing.T, err error) *APIContractError {
@@ -300,10 +309,8 @@ func TestMobileGetDayServings_WrongDayIsContractError(t *testing.T) {
 // nutrient maps, measures, and (for owned recipes) ingredients.
 func TestMobileGetAllFoods_MatchesGWT(t *testing.T) {
 	ids := []int64{81323197, 68943617, 450856, 80069621, 22688784, 14570120, 20398297, 20118617, 28932880, 27536487}
-	gwt, err := parseGetAllFoodsResponse(loadFixture(t, "testdata/getallfood-2026-10-food-v2.txt"), ids)
-	if err != nil {
-		t.Fatalf("GWT fixture: %v", err)
-	}
+	var gwt map[int64]*FoodDetail
+	loadGolden(t, "testdata/golden-gwt-getallfood-2026-10-27.json", &gwt)
 
 	srv := newMobileTestServer(t)
 	foods, err := srv.client(t).GetAllFoods(context.Background(), ids)
@@ -349,10 +356,8 @@ func TestMobileGetAllFoods_MatchesGWT(t *testing.T) {
 }
 
 func TestMobileGetFood_MatchesGWT(t *testing.T) {
-	gwt, err := parseGetFoodResponse(loadFixture(t, "testdata/getfood-2026-10-food-v2.txt"), 81323197)
-	if err != nil {
-		t.Fatalf("GWT fixture: %v", err)
-	}
+	var gwt *FoodDetail
+	loadGolden(t, "testdata/golden-gwt-getfood-81323197.json", &gwt)
 	srv := newMobileTestServer(t)
 	m, err := srv.client(t).GetFood(context.Background(), 81323197)
 	if err != nil {

@@ -2,40 +2,42 @@
 
 gocronometer is a GPLv2-licensed Go module that provides a client for reading your
 own data out of [Cronometer](https://cronometer.com). It speaks the same unpublished
-API the Cronometer single-page app uses.
+JSON API the Cronometer phone app uses (`mobile.cronometer.com/api/v2`).
 
-> **This is [@brandonm](https://github.com/brandonm)'s fork**, ahead of upstream
-> `jrmycanady/gocronometer` (v1.5.1). It adds quota-free diary reading over GWT-RPC,
-> custom-food/recipe resolution, and automatic rate limiting. The module path is kept
-> as `github.com/jrmycanady/gocronometer` so it drops into existing code via a
-> `replace` directive — see [Using this fork](#using-this-fork).
+> **This is [@brandonm](https://github.com/brandonm)'s fork** of upstream
+> `jrmycanady/gocronometer` (v1.5.1). Upstream scraped the web app and its CSV
+> export; this fork replaces all of that with a client for the mobile API, which
+> adds quota-free diary reading, custom-food/recipe resolution, and automatic rate
+> limiting. The module path is kept as `github.com/jrmycanady/gocronometer` so it
+> drops into existing code via a `replace` directive — see
+> [Using this fork](#using-this-fork).
 
-**IMPORTANT:** This module uses the same API the SPA uses. For that reason it should
-only be used by single users wanting to read/back-up their *own* personal data. It
-should never be used for integrations that the enterprise plan would cover. The
-library is licensed under the GPLv2 to help discourage unacceptable usage.
+**IMPORTANT:** This module uses the same API the Cronometer app uses. For that reason
+it should only be used by single users wanting to read/back-up their *own* personal
+data. It should never be used for integrations that the enterprise plan would cover.
+The library is licensed under the GPLv2 to help discourage unacceptable usage.
 
 **IMPORTANT:** Always scope your requests to a reasonable date range. Never
 continually re-read all data or data you already have.
 
 ---
 
-## What's new in this fork
+## Why the mobile API
 
-| Capability | Why it matters |
-|---|---|
-| **Mobile JSON API client** (`MobileClient`) — **recommended** | Talks to `mobile.cronometer.com/api/v2`, the API the Cronometer phone app uses. Named JSON fields instead of GWT's positional stream, and the server must keep serving app builds users have not updated. Same methods and return types as the GWT client. |
-| **Diary reading over GWT-RPC** (`GetDayServings`) | The legacy CSV `/export` endpoint is capped at roughly **10 exports per day**. `getDayInfo` is the same call the web diary uses — **no daily quota** — and it returns **water servings**, which the CSV export drops. |
-| **Custom foods & recipes** (`FindMyFoods`, `GetFood`, `GetAllFoods`) | Resolve a serving's food ID to its name, source, per-100 g nutrients, measures, and (for recipes) its ingredient list. |
-| **Automatic rate limiting** | The client throttles every request and, on login, fetches Cronometer's published `throttle-config` to honor the real `gwt_rpc` limit. Nothing to wire up. |
+Through v1.7, this fork read Cronometer's web app over GWT-RPC. GWT payloads are
+positional token streams, and the web app is redeployed to every visitor at once,
+so each Cronometer release that added a field to a serialized class broke every
+reader (2026-07-16, 2026-08-24, 2026-10-28). The mobile API carries named JSON
+fields and has to keep serving app builds users have not updated, so it changes far
+less abruptly — and it announces sunsets in a response header ahead of time.
+
+**v1.9.0 removed the web/GWT client** (`Client`, `NewClient`, the GWT decoders, and
+the CSV `Export*` calls, which depended on the web login). The CSV `Parse*`
+functions remain for exports obtained elsewhere.
 
 ---
 
 ## Install
-
-```bash
-go get github.com/jrmycanady/gocronometer
-```
 
 ### Using this fork
 
@@ -45,7 +47,7 @@ The module keeps the upstream path, so point your `go.mod` at this fork with a
 ```
 // go.mod
 require github.com/jrmycanady/gocronometer v1.5.1
-replace github.com/jrmycanady/gocronometer => github.com/brandonm/gocronometer v1.6.0
+replace github.com/jrmycanady/gocronometer => github.com/brandonm/gocronometer v1.9.0
 ```
 
 ```go
@@ -54,7 +56,7 @@ import "github.com/jrmycanady/gocronometer"
 
 ---
 
-## Mobile API client (recommended)
+## Quick start
 
 ```go
 c := gocronometer.NewMobileClient(&gocronometer.MobileClientOptions{
@@ -64,55 +66,27 @@ c := gocronometer.NewMobileClient(&gocronometer.MobileClientOptions{
 if err := c.Login(ctx, username, password); err != nil {
 	log.Fatal(err)
 }
-servings, err := c.GetDayServings(ctx, day)        // get_diary
-foods, err := c.GetAllFoods(ctx, []int64{450856})  // get_foods (+ get_food for owned recipes)
-myFoods, err := c.FindMyFoods(ctx)                 // get_myfoods: custom foods, recipes, meals
-```
 
-- **Fails loudly on shape changes.** A renamed or dropped JSON field would
-  otherwise decode as a silent zero. Every field the client relies on is
-  checked, and a missing one returns `*APIContractError` (with a
-  `Fingerprint()` for alert de-duplication) instead of data.
-- **Login never writes your timezone.** The login endpoint treats a non-null
-  `timezone` as a write to the account setting; the client always sends null.
-- **Sessions renew once, transparently**, and requests are paced to half the
-  published `mobile_v2` limit from `throttle-config`.
-- Accounts with two-factor authentication are not supported.
-
-Every value the client returns was checked against the GWT client on live
-data (see `mobile_live_test.go`, opt-in with `GOCRONOMETER_MOBILE_PROBE=1`).
-
----
-
-## Quick start — read a day's diary over GWT-RPC
-
-```go
-// NewClient installs an automatic rate limiter (see Rate limiting below).
-c := gocronometer.NewClient(nil)
-
-// Login also fetches Cronometer's published throttle-config and tunes the limiter.
-if err := c.Login(context.Background(), username, password); err != nil {
-	log.Fatalf("login failed: %s", err)
-}
-defer c.Logout(context.Background())
-
-// Read one day's servings via GWT-RPC (getDayInfo) — no daily export quota.
-day := time.Date(2026, 6, 28, 0, 0, 0, 0, time.UTC)
-servings, err := c.GetDayServings(context.Background(), day)
+day := time.Date(2026, 10, 27, 0, 0, 0, 0, time.UTC)
+servings, err := c.GetDayServings(ctx, day) // get_diary
 if err != nil {
-	log.Fatalf("getDayInfo failed: %s", err)
+	log.Fatal(err)
 }
-
 for _, s := range servings {
-	fmt.Printf("%-12s food=%d amount=%.2f\n",
-		gocronometer.MealGroupName(s.MealGroup), s.FoodID, s.Amount)
+	fmt.Printf("%-12s food=%d amount=%.2f\n", gocronometer.MealGroupName(s.MealGroup), s.FoodID, s.Amount)
 }
 ```
 
-`getDayInfo` is a **single-day** call, so to cover a range, loop it across the dates
-you need.
+`GetDayServings` is a **single-day** call; loop it across the dates you need.
 
-### `DayServing`
+| method | endpoint | returns |
+|---|---|---|
+| `Login(ctx, email, password)` | `login` | — |
+| `GetDayServings(ctx, day)` | `get_diary` | `[]DayServing` (biometric/exercise entries skipped) |
+| `GetFood(ctx, foodID)` | `get_food` | `*FoodDetail`, with ingredients for recipes/meals |
+| `GetAllFoods(ctx, foodIDs)` | `get_foods` (+ `get_food` per owned food) | `map[int64]*FoodDetail` |
+| `FindMyFoods(ctx)` | `get_myfoods` | `[]CustomFood`: your custom foods, recipes, and meals |
+| `Deprecation()` | any response | the latest sunset notice, or nil |
 
 ```go
 type DayServing struct {
@@ -122,109 +96,51 @@ type DayServing struct {
 	MealGroup int       // 1=Breakfast 2=Lunch 3=Dinner 4=Snacks 5=Supplements 6=Water
 	Date      time.Time // the diary day this serving belongs to
 }
-```
 
-`MealGroupName(group int) string` maps the `MealGroup` index to its display name.
-
-A `DayServing` references a food by ID plus an amount; nutrient values are not
-embedded. Resolve them with the custom-food calls below (per-100 g × grams), reusing
-the food cache.
-
----
-
-## Custom foods, recipes & nutrients
-
-| func | description |
-|---|---|
-| `FindMyFoods(ctx) ([]CustomFood, error)` | Lists your custom foods/recipes/meals (`ID`, `Name`). |
-| `GetFood(ctx, foodID) (*FoodDetail, error)` | Full detail for one food: name, source, ingredients (if a recipe), per-100 g nutrients, and measures. |
-| `GetAllFoods(ctx, foodIDs) (map[int64]*FoodDetail, error)` | Batch `GetFood` — resolve many food IDs at once. |
-| `GetFoodIngredients(ctx, foodID) ([]RecipeIngredient, error)` | Just the ingredient list for a recipe/meal. |
-
-```go
 type FoodDetail struct {
 	FoodID           int64
 	Name             string
-	Source           string             // e.g. "NCCDB", "CRDB", "custom"
+	Source           string             // e.g. "NCCDB:4974", "CRDB", "Custom"
 	Ingredients      []RecipeIngredient // populated for recipes/meals
 	NutrientsPer100g map[int]float64    // keyed by USDA nutrient code; per 100 g
 	Measures         []FoodMeasure      // measure ID -> grams (convert amount → grams)
 }
 ```
 
----
-
-## Rate limiting
-
-`NewClient` installs an `http.RoundTripper` that paces every request to a safe
-default (`DefaultGWTRateLimit`). On `Login`, the client fetches Cronometer's published
-limits from `/api/v3/throttle-config` and tunes itself to a fraction of the real
-`gwt_rpc` rate, leaving headroom for any concurrent web/app sessions. This is
-automatic — you don't need to call anything.
-
-You can inspect the published limits yourself:
-
-```go
-cfg, err := c.GetThrottleConfig(context.Background())
-```
+`USDANutrientNames` maps nutrient codes to names and units.
 
 ---
 
-## Legacy CSV exports
+## Behavior worth knowing
 
-The original CSV `/export` endpoint is still available, but is subject to
-Cronometer's **~10 exports/day** quota and **omits water servings**. Prefer
-`GetDayServings` for diary data. The exports return raw CSV.
+- **Fails loudly on shape changes.** A renamed or dropped JSON field would otherwise
+  decode as a silent zero. Every field the client relies on is checked, and a
+  missing one returns `*APIContractError{Endpoint, Field, Problem, Detail}` — with a
+  `Fingerprint()` for alert de-duplication — instead of data.
+- **Recipes keep their ingredients.** `get_foods` omits ingredient lists, so
+  `GetAllFoods` re-fetches every food you own with `get_food`. `get_food` omits the
+  `ingredients` key for plain custom foods, so its absence is an error only for foods
+  `get_myfoods` lists as recipes or meals.
+- **Login never writes your timezone.** The login endpoint treats a non-null
+  `timezone` as a write to the account setting; the client always sends null.
+- **Sessions renew once, transparently** when the server rejects a session.
+- **Rate limiting is automatic.** Requests are paced to `DefaultMobileRateLimit`
+  until `Login` fetches Cronometer's published `throttle-config`, then to
+  `ThrottleSafetyFactor` (half) of the `mobile_v2` limit.
+- Accounts with two-factor authentication are not supported.
 
-| func | description |
+---
+
+## Parsing CSV exports
+
+For CSV exports downloaded from Cronometer yourself:
+
+| func | parses |
 |---|---|
-| `ExportDailyNutrition()` | Daily nutrition for the date range. |
-| `ExportServings()` | Servings for the date range. |
-| `ExportExercises()` | Exercises for the date range. |
-| `ExportBiometrics()` | Biometrics for the date range. |
-| `ExportNotes()` | Notes for the date range. |
-
-### Parsing CSV exports
-
-| func | parses output of |
-|---|---|
-| `ParseServingsExport()` | `ExportDailyNutrition()`, `ExportServings()` |
-| `ParseExerciseExport()` | `ExportExercises()` |
-| `ParseBiometricRecordsExport()` | `ExportBiometrics()` |
-
-The `*Parsed` helpers (`ExportServingsParsed`, etc.) export and parse in one call.
-
----
-
-## API Magic Values
-
-This library mimics the GWT HTTP requests Cronometer's deployed GWT application makes.
-Several values can only be obtained by loading the application itself, and they change
-over time with application updates. The library ships known-good defaults, but `Login`
-also discovers the live permutation and serialization policy from Cronometer's public
-GWT assets before authenticating.
-
-Compatible application rebuilds are adopted automatically. The library compares the
-serialization signatures of every class it decodes; if a watched layout changed,
-`Login` returns `*GWTWireIncompatibleError` before collecting diary data. The observed
-`GWTWireStatus` includes the live build identifiers, watched class hashes, a stable
-schema fingerprint, and the incompatible classes (if any).
-
-Call `RefreshGWTWireStatus` to repeat the check on a long-lived client, or inspect the
-last result with `GWTWireStatus`. `ClientOptions.OnGWTWireStatus` can persist or report
-every discovered status. `DisableGWTWireCheck` exists for controlled offline use; it
-removes the pre-login compatibility guard.
-
-| Name | Location | Changes |
-|---|---|---|
-| `GWTContentType` | Request header. | false |
-| `GWTModuleBase` | Request header. | false |
-| `GWTPermutation` | Request header. | true |
-| `GWTHeader` | GWT request body. | true |
-
-Explicit `GWTPermutation` and `GWTHeader` options remain useful for tests and emergency
-overrides. With the default compatibility check enabled, compatible live values replace
-those request identifiers during login.
+| `ParseServingsExport()` | daily nutrition / servings exports |
+| `ParseExerciseExport()` | exercise exports |
+| `ParseBiometricRecordsExport()` | biometric exports |
+| `ParseFoodExport()` | single-food exports |
 
 ---
 
@@ -234,11 +150,17 @@ those request identifiers during login.
 go test ./...
 ```
 
-Offline unit tests (GWT deserializers, custom-food parsing, diary decoding) run
-with no setup. The live integration tests in `gocronometer_test.go` hit the real
-Cronometer API and **skip** unless `GOCRONOMETER_TEST_USERNAME` and
-`GOCRONOMETER_TEST_PASSWORD` are set — so CI stays green without secrets, and you can
-run the full suite against your own account by exporting both.
+Unit tests run offline against live responses captured from the mobile API
+(`testdata/mobile-*.json`, user ID scrubbed). Before GWT was removed, the same diary
+day was decoded through the GWT client; `testdata/golden-gwt-*.json` freeze that
+decode, and the tests require the mobile client to match it exactly.
+
+The live test skips unless explicitly enabled:
+
+```bash
+GOCRONOMETER_MOBILE_PROBE=1 GOCRONOMETER_TEST_USERNAME=... GOCRONOMETER_TEST_PASSWORD=... \
+  go test -run TestMobileLive -v .
+```
 
 ---
 
