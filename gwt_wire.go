@@ -30,7 +30,7 @@ var knownGWTClassSignatures = map[string][]string{
 	"com.cronometer.shared.entries.models.Day":         {"782579793"},
 	"com.cronometer.shared.entries.models.DayInfo":     {"416556043"},
 	"com.cronometer.shared.entries.models.Serving":     {"2553599101"},
-	"com.cronometer.shared.foods.models.Food":          {"2097636843"},
+	"com.cronometer.shared.foods.models.Food":          {"2097636843", "3482863798"},
 	"com.cronometer.shared.foods.models.FoodMeasures":  {"2106205728"},
 	"com.cronometer.shared.foods.models.Ingredient":    {"1280520736"},
 	"com.cronometer.shared.foods.models.Measure":       {"824760657", "1410168823", "1979099908"},

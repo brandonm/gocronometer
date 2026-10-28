@@ -572,7 +572,7 @@ func parseGetAllFoodsResponse(body string, requestedIDs []int64) (map[int64]*Foo
 			if foodType == "" || !strings.Contains(foodType, "models.Food/") {
 				return nil, fmt.Errorf("food %d: expected Food type, got %q", i, foodType)
 			}
-			food, deserErr := DeserializeFood(r)
+			food, deserErr := DeserializeFood(r, foodType)
 			if deserErr != nil {
 				return nil, fmt.Errorf("food %d: %w", i, deserErr)
 			}
@@ -591,7 +591,7 @@ func parseGetAllFoodsResponse(body string, requestedIDs []int64) (map[int64]*Foo
 }
 
 // parseGetFoodResponse extracts food details from a getFood GWT response.
-// Uses the proper GWT deserializer with verified 20-field mapping.
+// Uses the proper GWT deserializer, which selects the field layout by vintage.
 //
 // Fails loudly on anything that is not a well-formed Food: wrong response
 // type, empty name, or an ID that doesn't match the request. Before
@@ -613,7 +613,7 @@ func parseGetFoodResponse(body string, requestedFoodID int64) (*FoodDetail, erro
 		return nil, fmt.Errorf("expected Food type, got %q", typeSig)
 	}
 
-	food, err := DeserializeFood(r)
+	food, err := DeserializeFood(r, typeSig)
 	if err != nil {
 		return nil, fmt.Errorf("deserialize food: %w", err)
 	}

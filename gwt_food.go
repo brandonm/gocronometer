@@ -70,18 +70,46 @@ const (
 	derivedMeasureTypeV3 = "com.cronometer.shared.measurement.DerivedMeasure/4214796590"
 )
 
-// DeserializeFood reads a Food object from the GWT stream.
-// Must be called after ReadObject() returns the Food type signature.
+// Food type descriptors pin the known serialization vintages, for the same
+// reason as the Measure ones above: an unknown hash is an unknown field layout,
+// and the fixed walk below would misalign every food after it.
+const (
+	// foodTypeV1 is the layout Cronometer served until 2026-10-28.
+	foodTypeV1 = "com.cronometer.shared.foods.models.Food/2097636843"
+
+	// foodTypeV2 is the layout served from 2026-10-28: V1 minus one of the two
+	// always-zero ints (fields 6/7) that preceded the food ID. Every field from
+	// the food ID onward moved up by one position.
+	foodTypeV2 = "com.cronometer.shared.foods.models.Food/3482863798"
+)
+
+// DeserializeFood reads a Food object from the GWT stream. typeSig is the type
+// descriptor ReadObject() returned for it; the field layout is selected by its
+// serialization hash, and an unrecognized hash is a hard error.
+func DeserializeFood(r *GWTReader, typeSig string) (*GWTFood, error) {
+	switch typeSig {
+	case foodTypeV1:
+		return deserializeFoodFields(r, true)
+	case foodTypeV2:
+		return deserializeFoodFields(r, false)
+	}
+	return nil, fmt.Errorf("unknown Food vintage %q — Cronometer layout change, re-capture the wire format", typeSig)
+}
+
+// deserializeFoodFields reads a Food body. V1 and V2 differ by exactly one
+// int, so both share this walk; withExtraInt selects V1. Field order was
+// recovered from the compiled GWT permutation's generated deserializer (19
+// reads for V2) and confirmed against live captures in testdata/.
 //
-// Food has 20 fields (verified by tracing PKi/RKi in compiled GWT JS):
+// V1 layout (20 fields; V2 drops field 7, renumbering the rest down by one):
 //
 //	 1 (b)  int     — unknown (always 0)
 //	 2 (c)  double  — unknown (always 0)
 //	 3 (d)  object  — barcode/UPC ArrayList
 //	 4 (e)  int     — unknown
 //	 5 (f)  string  — description
-//	 6 (g)  int     — unknown
-//	 7 (i)  int     — unknown
+//	 6 (g)  int     — unknown (always 0)
+//	 7 (i)  int     — V1 ONLY: unknown (always 0)
 //	 8 (j)  int     — Food ID
 //	 9 (k)  object  — Ingredients (ArrayList of Ingredient)
 //	10 (n)  object  — NutritionLabelType enum
@@ -95,7 +123,10 @@ const (
 //	18 (A)  object  — Translations (ArrayList of Translation)
 //	19 (B)  object  — FoodType enum
 //	20 (C)  int     — user ID
-func DeserializeFood(r *GWTReader) (*GWTFood, error) {
+//
+// The two always-zero ints are indistinguishable on the wire, so which of
+// them V2 removed cannot be told from captures; neither is decoded.
+func deserializeFoodFields(r *GWTReader, withExtraInt bool) (*GWTFood, error) {
 	f := &GWTFood{
 		Nutrients:    make(map[int]float64),
 		Translations: make(map[string]string),
@@ -113,8 +144,10 @@ func DeserializeFood(r *GWTReader) (*GWTFood, error) {
 	f.Description = r.ReadString()
 	// Field 6 (g): int — unknown
 	r.ReadInt()
-	// Field 7 (i): int — unknown
-	r.ReadInt()
+	// Field 7 (i): int — V1 only, unknown
+	if withExtraInt {
+		r.ReadInt()
+	}
 	// Field 8 (j): int — Food ID
 	f.ID = r.ReadInt()
 	// Field 9 (k): object — Ingredients ArrayList
@@ -566,24 +599,25 @@ func skipStringHashMap(r *GWTReader) {
 	}
 	count := r.ReadInt()
 	for i := 0; i < count; i++ {
-		// Key: String object + string value
-		keyType := r.ReadObject()
-		if keyType != "" && !isBackRef(keyType) {
-			r.ReadString()
-		} else if isBackRef(keyType) {
-			r.ReadString()
-		}
-		// Value: String object + string value
-		valType := r.ReadObject()
-		if valType != "" && !isBackRef(valType) {
-			r.ReadString()
-		} else if isBackRef(valType) {
-			r.ReadString()
-		}
+		// Key and value are each a String object: type token + string value
+		// on first occurrence, or a lone back-reference token when that
+		// String was already serialized earlier in the response (e.g. the
+		// same property key on a second food in a getAllFood batch).
+		skipStringObject(r)
+		skipStringObject(r)
 	}
 }
 
 // isBackRef returns true if the type string is a back-reference marker.
+// skipStringObject reads and discards one String object. A null or
+// back-referenced String is a single token with no payload.
+func skipStringObject(r *GWTReader) {
+	typ := r.ReadObject()
+	if typ != "" && !isBackRef(typ) {
+		r.ReadString()
+	}
+}
+
 func isBackRef(typ string) bool {
 	return strings.HasPrefix(typ, "__backref")
 }

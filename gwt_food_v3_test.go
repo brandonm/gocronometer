@@ -33,7 +33,7 @@ func gwtFoodsFromBatch(t *testing.T, body string) []*GWTFood {
 		if !strings.Contains(typ, "models.Food/") {
 			t.Fatalf("element %d: expected a Food, got %q", i, typ)
 		}
-		f, err := DeserializeFood(r)
+		f, err := DeserializeFood(r, typ)
 		if err != nil {
 			t.Fatalf("element %d: DeserializeFood: %v", i, err)
 		}

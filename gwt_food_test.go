@@ -23,7 +23,7 @@ func TestDeserializeFood_Lettuce(t *testing.T) {
 		t.Fatalf("expected Food type, got %q", typeSig)
 	}
 
-	food, err := DeserializeFood(r)
+	food, err := DeserializeFood(r, typeSig)
 	if err != nil {
 		t.Fatalf("DeserializeFood: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestDeserializeFood_BasicSandwich(t *testing.T) {
 		t.Fatalf("expected Food type, got %q", typeSig)
 	}
 
-	food, err := DeserializeFood(r)
+	food, err := DeserializeFood(r, typeSig)
 	if err != nil {
 		t.Fatalf("DeserializeFood: %v", err)
 	}
@@ -187,7 +187,7 @@ func TestDeserializeFood_BatchCRDB(t *testing.T) {
 		if foodType == "" || !strings.Contains(foodType, "Food") {
 			t.Fatalf("food %d: expected Food type, got %q", i, foodType)
 		}
-		food, err := DeserializeFood(r)
+		food, err := DeserializeFood(r, foodType)
 		if err != nil {
 			t.Fatalf("food %d: %v", i, err)
 		}
