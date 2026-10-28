@@ -104,11 +104,16 @@ type ThrottleConfig struct {
 
 // GetThrottleConfig fetches Cronometer's current published rate-limit config.
 func (c *Client) GetThrottleConfig(ctx context.Context) (*ThrottleConfig, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", ThrottleConfigURL, nil)
+	return fetchThrottleConfig(ctx, c.HTTPClient, ThrottleConfigURL)
+}
+
+// fetchThrottleConfig fetches the published rate-limit config from url.
+func fetchThrottleConfig(ctx context.Context, hc *http.Client, url string) (*ThrottleConfig, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.HTTPClient.Do(req)
+	resp, err := hc.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("throttle-config request: %w", err)
 	}

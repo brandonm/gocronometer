@@ -24,6 +24,7 @@ continually re-read all data or data you already have.
 
 | Capability | Why it matters |
 |---|---|
+| **Mobile JSON API client** (`MobileClient`) — **recommended** | Talks to `mobile.cronometer.com/api/v2`, the API the Cronometer phone app uses. Named JSON fields instead of GWT's positional stream, and the server must keep serving app builds users have not updated. Same methods and return types as the GWT client. |
 | **Diary reading over GWT-RPC** (`GetDayServings`) | The legacy CSV `/export` endpoint is capped at roughly **10 exports per day**. `getDayInfo` is the same call the web diary uses — **no daily quota** — and it returns **water servings**, which the CSV export drops. |
 | **Custom foods & recipes** (`FindMyFoods`, `GetFood`, `GetAllFoods`) | Resolve a serving's food ID to its name, source, per-100 g nutrients, measures, and (for recipes) its ingredient list. |
 | **Automatic rate limiting** | The client throttles every request and, on login, fetches Cronometer's published `throttle-config` to honor the real `gwt_rpc` limit. Nothing to wire up. |
@@ -53,7 +54,37 @@ import "github.com/jrmycanady/gocronometer"
 
 ---
 
-## Quick start — read a day's diary (recommended)
+## Mobile API client (recommended)
+
+```go
+c := gocronometer.NewMobileClient(&gocronometer.MobileClientOptions{
+	// Cronometer announces API sunsets in a response header; act before the date.
+	OnDeprecation: func(n gocronometer.DeprecationNotice) { log.Printf("deprecation: %+v", n) },
+})
+if err := c.Login(ctx, username, password); err != nil {
+	log.Fatal(err)
+}
+servings, err := c.GetDayServings(ctx, day)        // get_diary
+foods, err := c.GetAllFoods(ctx, []int64{450856})  // get_foods (+ get_food for owned recipes)
+myFoods, err := c.FindMyFoods(ctx)                 // get_myfoods: custom foods, recipes, meals
+```
+
+- **Fails loudly on shape changes.** A renamed or dropped JSON field would
+  otherwise decode as a silent zero. Every field the client relies on is
+  checked, and a missing one returns `*APIContractError` (with a
+  `Fingerprint()` for alert de-duplication) instead of data.
+- **Login never writes your timezone.** The login endpoint treats a non-null
+  `timezone` as a write to the account setting; the client always sends null.
+- **Sessions renew once, transparently**, and requests are paced to half the
+  published `mobile_v2` limit from `throttle-config`.
+- Accounts with two-factor authentication are not supported.
+
+Every value the client returns was checked against the GWT client on live
+data (see `mobile_live_test.go`, opt-in with `GOCRONOMETER_MOBILE_PROBE=1`).
+
+---
+
+## Quick start — read a day's diary over GWT-RPC
 
 ```go
 // NewClient installs an automatic rate limiter (see Rate limiting below).
